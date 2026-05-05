@@ -23,39 +23,7 @@ import {
 const MIN_TAP_H = '44px'
 const API_BASE = import.meta.env.VITE_API_BASE_URL || `http://${window.location.hostname}:8000`
 
-const BRANCH_OPTIONS_FALLBACK = [
-  'СТОВ "Старинська птахофабрика"',
-  'Філія "Перемога Нова" ТОВ "Вінницька птахофабрика"',
-  'ТОВ "Любим\'ясо"',
-  'ТОВ "Український м\'ясний хутір"',
-  'Філія "Птахокомплекс" ТОВ "Вінницька птахофабрика"',
-  'ВП "Біогаз Ладижин" ТОВ "Вінницька птахофабрика"',
-  'ПрАТ "Миронівська птахофабрика"',
-  'Миронівський м\'ясопереробний завод "ЛЕЙКО" / ВП ПрАТ "Миронівський завод по виготовленню круп і комбікормів"',
-  'Філія "Переробний комплекс" ТОВ "Вінницька птахофабрика"',
-  'ПрАТ "Оріль-Лідер"',
-  'ПрАТ "МХП", Філія "МХП-Логістика"',
-  'ТОВ "Овочева скарбниця МХП"',
-  'ТОВ МХП "Фудсервіс"',
-  'ПрАТ "МХП"',
-  'ПрАТ "Агрофорт"',
-  'ТОВ "Околиця Істейт"',
-  'Новомосковська філія ПрАТ "Оріль Лідер"',
-  'ТОВ "Катеринопільський елеватор"',
-  'ПрАТ "Миронівський завод по виготовленню круп та комбікормів"',
-  'Філія ПрАТ "Зернопродукт МХП" "Ямпільський елеватор"',
-  'Філія ПрАТ "Зернопродукт МХП" "Перспектив"',
-  'Філія ПрАТ "Зернопродукт МХП" "Рідний край"',
-  'Філія "ВВК" ТОВ "Вінницька птахофабрика"',
-  'Філія "Елеваторний комплекс"',
-  'ПрАТ "Зернопродукт МХП"',
-  'ТОВ "Захід-Агро МХП"',
-  'ТОВ "Баффало МХП"',
-  'ТОВ "МХП-Агрокряк"',
-  'ТОВ "НВФ \\"Урожай\\""',
-  'ТОВ "МХП-Агро-С"',
-  'ТОВ "МХП-Урожайна країна"',
-]
+const BRANCH_OPTIONS_FALLBACK = ['Філія 1', 'Філія 2', 'Філія 3']
 
 function isoToday() {
   const d = new Date()
@@ -74,12 +42,12 @@ function emptyRow(orderNumber) {
 }
 
 function App() {
-  const [branch, setBranch] = useState('Філія «Птахокомплекс» ТОВ «Вінницька птахофабрика»')
+  const [branch, setBranch] = useState('')
   const [branchOptions, setBranchOptions] = useState(BRANCH_OPTIONS_FALLBACK)
   const [revision, setRevision] = useState('0')
   const [reportDate, setReportDate] = useState(isoToday())
 
-  const [siteName, setSiteName] = useState('ВДВП №10')
+  const [siteName, setSiteName] = useState('')
   const [siteOptions, setSiteOptions] = useState([])
   const [inspectionForm, setInspectionForm] = useState('позапланова')
   const [inspectorFullName, setInspectorFullName] = useState('')
@@ -330,7 +298,7 @@ function App() {
                   <FormLabel>ПІБ еколога</FormLabel>
                   <Input
                     minH={MIN_TAP_H}
-                    placeholder="Напр. Василь КОЗІК"
+                    placeholder="Введіть ПІБ"
                     value={inspectorFullName}
                     onChange={(e) => setInspectorFullName(e.target.value)}
                   />
@@ -340,7 +308,7 @@ function App() {
                   <FormLabel>Посада еколога</FormLabel>
                   <Input
                     minH={MIN_TAP_H}
-                    placeholder="Напр. Провідний Еколог"
+                    placeholder="Введіть посаду"
                     value={inspectorPosition}
                     onChange={(e) => setInspectorPosition(e.target.value)}
                   />
@@ -350,7 +318,7 @@ function App() {
                   <FormLabel>ПІБ представника дільниці</FormLabel>
                   <Input
                     minH={MIN_TAP_H}
-                    placeholder="Напр. Ярослав ГАВІНСЬКИЙ"
+                    placeholder="Введіть ПІБ"
                     value={unitRepFullName}
                     onChange={(e) => setUnitRepFullName(e.target.value)}
                   />
@@ -360,7 +328,7 @@ function App() {
                   <FormLabel>Посада представника дільниці</FormLabel>
                   <Input
                     minH={MIN_TAP_H}
-                    placeholder="Напр. Начальник дільниці"
+                    placeholder="Введіть посаду"
                     value={unitRepPosition}
                     onChange={(e) => setUnitRepPosition(e.target.value)}
                   />

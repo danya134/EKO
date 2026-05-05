@@ -27,10 +27,10 @@ from reportlab.platypus.flowables import KeepTogether
 from reportlab.lib.utils import ImageReader
 
 
-FONT_NAME = "TimesNewRoman"
-FONT_BOLD = "TimesNewRoman-Bold"
-FONT_ITALIC = "TimesNewRoman-Italic"
-FONT_BOLD_ITALIC = "TimesNewRoman-BoldItalic"
+FONT_NAME = "DejaVuSans"
+FONT_BOLD = "DejaVuSans-Bold"
+FONT_ITALIC = "DejaVuSans-Italic"
+FONT_BOLD_ITALIC = "DejaVuSans-BoldItalic"
 
 HEADER_H = 28 * mm
 TABLE_SIDE_GAP = 2 * mm
@@ -39,7 +39,7 @@ TABLE_SIDE_GAP = 2 * mm
 def _candidate_font_paths() -> list[str]:
     candidates: list[str] = []
 
-    # 1) Явна настройка в settings.py (рекомендовано)
+    # 1) Явна настройка в settings.py
     configured = getattr(settings, "REPORTLAB_FONT_PATH", None)
     if configured:
         candidates.append(str(configured))
@@ -49,20 +49,24 @@ def _candidate_font_paths() -> list[str]:
     if base_dir:
         candidates.extend(
             [
-                os.path.join(str(base_dir), "fonts", "times.ttf"),
-                os.path.join(str(base_dir), "fonts", "timesbd.ttf"),
-                os.path.join(str(base_dir), "fonts", "timesi.ttf"),
-                os.path.join(str(base_dir), "fonts", "timesbi.ttf"),
+                os.path.join(str(base_dir), "fonts", "DejaVuSans.ttf"),
+                os.path.join(str(base_dir), "fonts", "dejavu", "DejaVuSans.ttf"),
             ]
         )
 
-    # 3) Типові системні шляхи Windows
+    # 3) Типові системні шляхи Linux (Render)
     candidates.extend(
         [
-            r"C:\Windows\Fonts\times.ttf",
-            r"C:\Windows\Fonts\timesbd.ttf",
-            r"C:\Windows\Fonts\timesi.ttf",
-            r"C:\Windows\Fonts\timesbi.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
+        ]
+    )
+
+    # 4) Типові системні шляхи Windows (на випадок локального запуску)
+    candidates.extend(
+        [
+            r"C:\Windows\Fonts\DejaVuSans.ttf",
+            r"C:\Windows\Fonts\arial.ttf",
         ]
     )
 
@@ -74,21 +78,17 @@ def ensure_cyrillic_font_registered() -> None:
     if {FONT_NAME, FONT_BOLD, FONT_ITALIC, FONT_BOLD_ITALIC}.issubset(registered):
         return
 
-    # Реєструємо сімейство Times New Roman (4 варіанти), щоб <b>/<i> працювали коректно.
-    paths = {os.path.basename(p).lower(): p for p in _candidate_font_paths() if p}
-    need = {
-        FONT_NAME: paths.get("times.ttf"),
-        FONT_BOLD: paths.get("timesbd.ttf"),
-        FONT_ITALIC: paths.get("timesi.ttf"),
-        FONT_BOLD_ITALIC: paths.get("timesbi.ttf"),
-    }
-    if not all(need.values()):
+    # На хостингу (Render/Linux) надійніше використовувати DejaVuSans з системних шляхів.
+    font_path = next((p for p in _candidate_font_paths() if p and os.path.exists(p)), None)
+    if not font_path:
         raise RuntimeError(
-            "Не знайдено шрифти Times New Roman (times.ttf/timesbd.ttf/timesi.ttf/timesbi.ttf) у Windows Fonts "
-            "або в папці BASE_DIR/fonts."
+            "Не знайдено TTF-шрифт для кирилиці. "
+            "Додайте REPORTLAB_FONT_PATH або покладіть DejaVuSans.ttf у backend/fonts/."
         )
 
-    for font_name, font_path in need.items():
+    # Реєструємо як сімейство (normal/bold/italic), навіть якщо файл один —
+    # це дозволяє <b>/<i> не падати.
+    for font_name in (FONT_NAME, FONT_BOLD, FONT_ITALIC, FONT_BOLD_ITALIC):
         if font_name not in registered:
             pdfmetrics.registerFont(TTFont(font_name, str(font_path)))
 
