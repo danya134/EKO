@@ -27,10 +27,10 @@ from reportlab.platypus.flowables import KeepTogether
 from reportlab.lib.utils import ImageReader
 
 
-FONT_NAME = "DejaVuSans"
-FONT_BOLD = "DejaVuSans-Bold"
-FONT_ITALIC = "DejaVuSans-Italic"
-FONT_BOLD_ITALIC = "DejaVuSans-BoldItalic"
+FONT_NAME = "DejaVuSerif"
+FONT_BOLD = "DejaVuSerif-Bold"
+FONT_ITALIC = "DejaVuSerif-Italic"
+FONT_BOLD_ITALIC = "DejaVuSerif-BoldItalic"
 
 HEADER_H = 28 * mm
 TABLE_SIDE_GAP = 2 * mm
@@ -49,24 +49,24 @@ def _candidate_font_paths() -> list[str]:
     if base_dir:
         candidates.extend(
             [
-                os.path.join(str(base_dir), "fonts", "DejaVuSans.ttf"),
-                os.path.join(str(base_dir), "fonts", "dejavu", "DejaVuSans.ttf"),
+                os.path.join(str(base_dir), "fonts", "DejaVuSerif.ttf"),
+                os.path.join(str(base_dir), "fonts", "dejavu", "DejaVuSerif.ttf"),
             ]
         )
 
     # 3) Типові системні шляхи Linux (Render)
     candidates.extend(
         [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerifCondensed.ttf",
         ]
     )
 
     # 4) Типові системні шляхи Windows (на випадок локального запуску)
     candidates.extend(
         [
-            r"C:\Windows\Fonts\DejaVuSans.ttf",
-            r"C:\Windows\Fonts\arial.ttf",
+            r"C:\Windows\Fonts\DejaVuSerif.ttf",
+            r"C:\Windows\Fonts\times.ttf",
         ]
     )
 
