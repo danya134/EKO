@@ -42,6 +42,7 @@ def _candidate_font_paths() -> list[str]:
     # 1) Явна настройка в settings.py
     configured = getattr(settings, "REPORTLAB_FONT_PATH", None)
     if configured:
+        # Може бути як файл, так і директорія.
         candidates.append(str(configured))
 
     # 2) Локальна папка проєкту: BASE_DIR/fonts/...
@@ -50,7 +51,13 @@ def _candidate_font_paths() -> list[str]:
         candidates.extend(
             [
                 os.path.join(str(base_dir), "fonts", "DejaVuSerif.ttf"),
+                os.path.join(str(base_dir), "fonts", "DejaVuSerif-Bold.ttf"),
+                os.path.join(str(base_dir), "fonts", "DejaVuSerif-Italic.ttf"),
+                os.path.join(str(base_dir), "fonts", "DejaVuSerif-BoldItalic.ttf"),
                 os.path.join(str(base_dir), "fonts", "dejavu", "DejaVuSerif.ttf"),
+                os.path.join(str(base_dir), "fonts", "dejavu", "DejaVuSerif-Bold.ttf"),
+                os.path.join(str(base_dir), "fonts", "dejavu", "DejaVuSerif-Italic.ttf"),
+                os.path.join(str(base_dir), "fonts", "dejavu", "DejaVuSerif-BoldItalic.ttf"),
             ]
         )
 
@@ -58,6 +65,9 @@ def _candidate_font_paths() -> list[str]:
     candidates.extend(
         [
             "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Italic.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-BoldItalic.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSerifCondensed.ttf",
         ]
     )
@@ -78,17 +88,26 @@ def ensure_cyrillic_font_registered() -> None:
     if {FONT_NAME, FONT_BOLD, FONT_ITALIC, FONT_BOLD_ITALIC}.issubset(registered):
         return
 
-    # На хостингу (Render/Linux) надійніше використовувати DejaVuSans з системних шляхів.
-    font_path = next((p for p in _candidate_font_paths() if p and os.path.exists(p)), None)
-    if not font_path:
-        raise RuntimeError(
-            "Не знайдено TTF-шрифт для кирилиці. "
-            "Додайте REPORTLAB_FONT_PATH або покладіть DejaVuSans.ttf у backend/fonts/."
-        )
+    # Підбираємо 4 файли шрифтів (normal/bold/italic/boldItalic), щоб жирність/курсив виглядали коректно.
+    paths = {os.path.basename(p).lower(): p for p in _candidate_font_paths() if p}
+    need = {
+        FONT_NAME: paths.get("dejavuserif.ttf"),
+        FONT_BOLD: paths.get("dejavuserif-bold.ttf"),
+        FONT_ITALIC: paths.get("dejavuserif-italic.ttf"),
+        FONT_BOLD_ITALIC: paths.get("dejavuserif-bolditalic.ttf"),
+    }
 
-    # Реєструємо як сімейство (normal/bold/italic), навіть якщо файл один —
-    # це дозволяє <b>/<i> не падати.
-    for font_name in (FONT_NAME, FONT_BOLD, FONT_ITALIC, FONT_BOLD_ITALIC):
+    if not all(p and os.path.exists(p) for p in need.values()):
+        # fallback: беремо будь-який знайдений normal, щоб не падати (але жирність може бути слабша)
+        fallback = next((p for p in _candidate_font_paths() if p and os.path.exists(p)), None)
+        if not fallback:
+            raise RuntimeError(
+                "Не знайдено TTF-шрифти DejaVuSerif для кирилиці. "
+                "Перевірте наявність DejaVuSerif*.ttf або задайте REPORTLAB_FONT_PATH."
+            )
+        need = {k: fallback for k in need.keys()}
+
+    for font_name, font_path in need.items():
         if font_name not in registered:
             pdfmetrics.registerFont(TTFont(font_name, str(font_path)))
 
