@@ -33,6 +33,10 @@ ALLOWED_HOSTS = [
     ".local",
 ]
 
+allowed_hosts_env = os.getenv("DJANGO_ALLOWED_HOSTS", "").strip()
+if allowed_hosts_env:
+    ALLOWED_HOSTS = [host.strip() for host in allowed_hosts_env.split(",") if host.strip()]
+
 # Дозволяємо доступ з локальної мережі під час розробки (телефон -> ПК).
 if DEBUG:
     ALLOWED_HOSTS = ["*"]
@@ -132,6 +136,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / "staticfiles"
 CORS_ALLOW_ALL_ORIGINS = True
 
 # ReportLab: шлях до TTF-шрифту з кирилицею (DejaVuSans / FreeSans)
