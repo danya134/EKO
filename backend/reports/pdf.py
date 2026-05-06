@@ -27,10 +27,11 @@ from reportlab.platypus.flowables import KeepTogether
 from reportlab.lib.utils import ImageReader
 
 
-FONT_NAME = "DejaVuSerif"
-FONT_BOLD = "DejaVuSerif-Bold"
-FONT_ITALIC = "DejaVuSerif-Italic"
-FONT_BOLD_ITALIC = "DejaVuSerif-BoldItalic"
+# За замовчуванням — Times New Roman з backend/fonts/ (якщо є всі 4 TTF), інакше — DejaVuSerif з ОС.
+FONT_NAME = "TimesNewRoman"
+FONT_BOLD = "TimesNewRoman-Bold"
+FONT_ITALIC = "TimesNewRoman-Italic"
+FONT_BOLD_ITALIC = "TimesNewRoman-BoldItalic"
 
 HEADER_H = 28 * mm
 TABLE_SIDE_GAP = 2 * mm
@@ -39,25 +40,43 @@ TABLE_SIDE_GAP = 2 * mm
 def _candidate_font_paths() -> list[str]:
     candidates: list[str] = []
 
-    # 1) Явна настройка в settings.py
+    # 1) Явна настройка в settings.py (файл або каталог)
     configured = getattr(settings, "REPORTLAB_FONT_PATH", None)
     if configured:
-        # Може бути як файл, так і директорія.
-        candidates.append(str(configured))
+        root = str(configured)
+        if os.path.isdir(root):
+            for fname in (
+                "times.ttf",
+                "timesbd.ttf",
+                "timesi.ttf",
+                "timesbi.ttf",
+                "DejaVuSerif.ttf",
+                "DejaVuSerif-Bold.ttf",
+                "DejaVuSerif-Italic.ttf",
+                "DejaVuSerif-BoldItalic.ttf",
+            ):
+                candidates.append(os.path.join(root, fname))
+        else:
+            candidates.append(root)
 
     # 2) Локальна папка проєкту: BASE_DIR/fonts/...
     base_dir = getattr(settings, "BASE_DIR", None)
     if base_dir:
+        fonts_dir = os.path.join(str(base_dir), "fonts")
         candidates.extend(
             [
-                os.path.join(str(base_dir), "fonts", "DejaVuSerif.ttf"),
-                os.path.join(str(base_dir), "fonts", "DejaVuSerif-Bold.ttf"),
-                os.path.join(str(base_dir), "fonts", "DejaVuSerif-Italic.ttf"),
-                os.path.join(str(base_dir), "fonts", "DejaVuSerif-BoldItalic.ttf"),
-                os.path.join(str(base_dir), "fonts", "dejavu", "DejaVuSerif.ttf"),
-                os.path.join(str(base_dir), "fonts", "dejavu", "DejaVuSerif-Bold.ttf"),
-                os.path.join(str(base_dir), "fonts", "dejavu", "DejaVuSerif-Italic.ttf"),
-                os.path.join(str(base_dir), "fonts", "dejavu", "DejaVuSerif-BoldItalic.ttf"),
+                os.path.join(fonts_dir, "times.ttf"),
+                os.path.join(fonts_dir, "timesbd.ttf"),
+                os.path.join(fonts_dir, "timesi.ttf"),
+                os.path.join(fonts_dir, "timesbi.ttf"),
+                os.path.join(fonts_dir, "DejaVuSerif.ttf"),
+                os.path.join(fonts_dir, "DejaVuSerif-Bold.ttf"),
+                os.path.join(fonts_dir, "DejaVuSerif-Italic.ttf"),
+                os.path.join(fonts_dir, "DejaVuSerif-BoldItalic.ttf"),
+                os.path.join(fonts_dir, "dejavu", "DejaVuSerif.ttf"),
+                os.path.join(fonts_dir, "dejavu", "DejaVuSerif-Bold.ttf"),
+                os.path.join(fonts_dir, "dejavu", "DejaVuSerif-Italic.ttf"),
+                os.path.join(fonts_dir, "dejavu", "DejaVuSerif-BoldItalic.ttf"),
             ]
         )
 
@@ -75,37 +94,69 @@ def _candidate_font_paths() -> list[str]:
     # 4) Типові системні шляхи Windows (на випадок локального запуску)
     candidates.extend(
         [
-            r"C:\Windows\Fonts\DejaVuSerif.ttf",
             r"C:\Windows\Fonts\times.ttf",
+            r"C:\Windows\Fonts\timesbd.ttf",
+            r"C:\Windows\Fonts\timesi.ttf",
+            r"C:\Windows\Fonts\timesbi.ttf",
+            r"C:\Windows\Fonts\DejaVuSerif.ttf",
         ]
     )
 
     return candidates
 
 
+def _existing_font_basemap() -> dict[str, str]:
+    """basename(lower) -> перший існуючий шлях."""
+    out: dict[str, str] = {}
+    for p in _candidate_font_paths():
+        if not p or not os.path.isfile(p):
+            continue
+        key = os.path.basename(p).lower()
+        out.setdefault(key, p)
+    return out
+
+
 def ensure_cyrillic_font_registered() -> None:
+    global FONT_NAME, FONT_BOLD, FONT_ITALIC, FONT_BOLD_ITALIC
+
     registered = set(pdfmetrics.getRegisteredFontNames())
     if {FONT_NAME, FONT_BOLD, FONT_ITALIC, FONT_BOLD_ITALIC}.issubset(registered):
         return
 
-    # Підбираємо 4 файли шрифтів (normal/bold/italic/boldItalic), щоб жирність/курсив виглядали коректно.
-    paths = {os.path.basename(p).lower(): p for p in _candidate_font_paths() if p}
-    need = {
-        FONT_NAME: paths.get("dejavuserif.ttf"),
-        FONT_BOLD: paths.get("dejavuserif-bold.ttf"),
-        FONT_ITALIC: paths.get("dejavuserif-italic.ttf"),
-        FONT_BOLD_ITALIC: paths.get("dejavuserif-bolditalic.ttf"),
+    files = _existing_font_basemap()
+
+    times_need = {
+        "TimesNewRoman": "times.ttf",
+        "TimesNewRoman-Bold": "timesbd.ttf",
+        "TimesNewRoman-Italic": "timesi.ttf",
+        "TimesNewRoman-BoldItalic": "timesbi.ttf",
+    }
+    dejavu_need = {
+        "DejaVuSerif": "dejavuserif.ttf",
+        "DejaVuSerif-Bold": "dejavuserif-bold.ttf",
+        "DejaVuSerif-Italic": "dejavuserif-italic.ttf",
+        "DejaVuSerif-BoldItalic": "dejavuserif-bolditalic.ttf",
     }
 
-    if not all(p and os.path.exists(p) for p in need.values()):
-        # fallback: беремо будь-який знайдений normal, щоб не падати (але жирність може бути слабша)
-        fallback = next((p for p in _candidate_font_paths() if p and os.path.exists(p)), None)
+    need: dict[str, str] = {}
+    if all(files.get(bn) for bn in times_need.values()):
+        FONT_NAME, FONT_BOLD = "TimesNewRoman", "TimesNewRoman-Bold"
+        FONT_ITALIC, FONT_BOLD_ITALIC = "TimesNewRoman-Italic", "TimesNewRoman-BoldItalic"
+        need = {reg: files[bn] for reg, bn in times_need.items()}
+    elif all(files.get(bn) for bn in dejavu_need.values()):
+        FONT_NAME, FONT_BOLD = "DejaVuSerif", "DejaVuSerif-Bold"
+        FONT_ITALIC, FONT_BOLD_ITALIC = "DejaVuSerif-Italic", "DejaVuSerif-BoldItalic"
+        need = {reg: files[bn] for reg, bn in dejavu_need.items()}
+    else:
+        fallback = next(iter(files.values()), None)
         if not fallback:
             raise RuntimeError(
-                "Не знайдено TTF-шрифти DejaVuSerif для кирилиці. "
-                "Перевірте наявність DejaVuSerif*.ttf або задайте REPORTLAB_FONT_PATH."
+                "Не знайдено шрифти для PDF. Додайте у backend/fonts/ усі файли "
+                "times.ttf, timesbd.ttf, timesi.ttf, timesbi.ttf або покладіть DejaVuSerif*.ttf."
             )
-        need = {k: fallback for k in need.keys()}
+        FONT_NAME, FONT_BOLD = "DejaVuSerif", "DejaVuSerif-Bold"
+        FONT_ITALIC, FONT_BOLD_ITALIC = "DejaVuSerif-Italic", "DejaVuSerif-BoldItalic"
+        need = {k: fallback for k in (FONT_NAME, FONT_BOLD, FONT_ITALIC, FONT_BOLD_ITALIC)}
 
     for font_name, font_path in need.items():
         if font_name not in registered:

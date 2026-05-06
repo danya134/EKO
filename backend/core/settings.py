@@ -139,9 +139,10 @@ STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
 CORS_ALLOW_ALL_ORIGINS = True
 
-# ReportLab: шлях до TTF-шрифту з кирилицею (DejaVuSans / FreeSans)
-# Рекомендовано додати файл у: BASE_DIR / "fonts" / "DejaVuSans.ttf"
-REPORTLAB_FONT_PATH = BASE_DIR / "fonts" / "DejaVuSans.ttf"
+# ReportLab: каталог з TTF (times*.ttf або DejaVuSerif*.ttf). За замовчуванням — backend/fonts/.
+# Опційно на Render: REPORTLAB_FONT_PATH=/data/fonts
+_reportlab_font = os.getenv("REPORTLAB_FONT_PATH", "").strip()
+REPORTLAB_FONT_PATH = _reportlab_font or (BASE_DIR / "fonts")
 
 # Uploads (для фотофіксації в PDF)
 MEDIA_URL = "/media/"
