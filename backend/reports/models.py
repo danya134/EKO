@@ -15,7 +15,6 @@ class EnvironmentalReport(models.Model):
         blank=True,
         default="позапланова",
     )
-    expert_full_name = models.CharField("ПІБ експерта", max_length=255, blank=True, default="")
     inspector_full_name = models.CharField("ПІБ перевіряючого (еколог)", max_length=255)
     inspector_position = models.CharField("Посада перевіряючого", max_length=255, blank=True, default="Провідний Еколог")
     unit_representative_full_name = models.CharField(
@@ -23,6 +22,11 @@ class EnvironmentalReport(models.Model):
     )
     unit_representative_position = models.CharField(
         "Посада представника підрозділу", max_length=255, blank=True, default="Начальник дільниці"
+    )
+    additional_unit_representatives = models.JSONField(
+        "Додаткові представники підрозділу (посада, ПІБ)",
+        default=list,
+        blank=True,
     )
 
     created_at = models.DateTimeField(auto_now_add=True)

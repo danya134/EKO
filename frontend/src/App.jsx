@@ -41,6 +41,10 @@ function emptyRow(orderNumber) {
   }
 }
 
+function emptyAdditionalRep() {
+  return { position: '', fullName: '' }
+}
+
 function App() {
   const [branch, setBranch] = useState('')
   const [branchOptions, setBranchOptions] = useState(BRANCH_OPTIONS_FALLBACK)
@@ -54,6 +58,7 @@ function App() {
   const [inspectorPosition, setInspectorPosition] = useState('Провідний Еколог')
   const [unitRepFullName, setUnitRepFullName] = useState('')
   const [unitRepPosition, setUnitRepPosition] = useState('Начальник дільниці')
+  const [additionalReps, setAdditionalReps] = useState([])
 
   const [rows, setRows] = useState([emptyRow(1)])
   const [photos, setPhotos] = useState([])
@@ -128,6 +133,18 @@ function App() {
     setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
   }
 
+  const addAdditionalRep = () => {
+    setAdditionalReps((prev) => [...prev, emptyAdditionalRep()])
+  }
+
+  const removeAdditionalRep = (idx) => {
+    setAdditionalReps((prev) => prev.filter((_, i) => i !== idx))
+  }
+
+  const updateAdditionalRep = (idx, patch) => {
+    setAdditionalReps((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
+  }
+
   const onPhotosChange = (e) => {
     const files = Array.from(e.target.files || [])
     setPhotos(files)
@@ -163,6 +180,13 @@ function App() {
       fd.append('inspector_position', inspectorPosition)
       fd.append('unit_representative_full_name', unitRepFullName)
       fd.append('unit_representative_position', unitRepPosition)
+      const additionalPayload = additionalReps
+        .map((r) => ({
+          position: (r.position || '').trim(),
+          full_name: (r.fullName || '').trim(),
+        }))
+        .filter((r) => r.position || r.full_name)
+      fd.append('additional_unit_representatives_json', JSON.stringify(additionalPayload))
 
       const normalizedRows = rows
         .filter((r) => r.description.trim() || r.corrective_actions.trim() || r.responsible.trim() || r.due_date)
@@ -333,6 +357,62 @@ function App() {
                     onChange={(e) => setUnitRepPosition(e.target.value)}
                   />
                 </FormControl>
+
+                <VStack align="stretch" spacing={3}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    minH={MIN_TAP_H}
+                    alignSelf="flex-start"
+                    onClick={addAdditionalRep}
+                  >
+                    + Ще представник підрозділу
+                  </Button>
+                  {additionalReps.length ? (
+                    <Text fontSize="sm" color="gray.600">
+                      Додаткові представники (посада та ПІБ) — у PDF під основним представником, по одному блоку на
+                      кожного.
+                    </Text>
+                  ) : null}
+                  {additionalReps.map((r, idx) => (
+                    <Card key={idx} variant="outline" bg="gray.50">
+                      <CardBody>
+                        <VStack align="stretch" spacing={3}>
+                          <HStack justify="space-between" align="center">
+                            <Text fontWeight="600">Представник {idx + 2}</Text>
+                            <IconButton
+                              aria-label="Видалити"
+                              minH={MIN_TAP_H}
+                              size="sm"
+                              variant="ghost"
+                              icon={<span aria-hidden="true">✕</span>}
+                              onClick={() => removeAdditionalRep(idx)}
+                            />
+                          </HStack>
+                          <FormControl>
+                            <FormLabel>Посада</FormLabel>
+                            <Input
+                              minH={MIN_TAP_H}
+                              placeholder="Введіть посаду"
+                              value={r.position}
+                              onChange={(e) => updateAdditionalRep(idx, { position: e.target.value })}
+                            />
+                          </FormControl>
+                          <FormControl>
+                            <FormLabel>ПІБ</FormLabel>
+                            <Input
+                              minH={MIN_TAP_H}
+                              placeholder="Введіть ПІБ"
+                              value={r.fullName}
+                              onChange={(e) => updateAdditionalRep(idx, { fullName: e.target.value })}
+                            />
+                          </FormControl>
+                        </VStack>
+                      </CardBody>
+                    </Card>
+                  ))}
+                </VStack>
               </VStack>
             </CardBody>
           </Card>

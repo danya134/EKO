@@ -51,6 +51,7 @@ class EnvironmentalPhotoInputSerializer(serializers.Serializer):
 class EnvironmentalReportCreateSerializer(serializers.ModelSerializer):
     nonconformities = EnvironmentalNonconformitySerializer(many=True, required=False)
     photos = EnvironmentalPhotoInputSerializer(many=True, required=False)
+    additional_unit_representatives = serializers.JSONField(required=False, default=list)
 
     class Meta:
         model = EnvironmentalReport
@@ -64,9 +65,25 @@ class EnvironmentalReportCreateSerializer(serializers.ModelSerializer):
             "inspector_full_name",
             "unit_representative_position",
             "unit_representative_full_name",
+            "additional_unit_representatives",
             "nonconformities",
             "photos",
         ]
+
+    def validate_additional_unit_representatives(self, value):
+        if value in (None, ""):
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Очікується список об'єктів {position, full_name}")
+        out: list[dict[str, str]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            pos = str(item.get("position", "")).strip()
+            name = str(item.get("full_name", "")).strip()
+            if pos or name:
+                out.append({"position": pos, "full_name": name})
+        return out
 
     def create(self, validated_data):
         nonconformities = validated_data.pop("nonconformities", [])

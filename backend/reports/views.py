@@ -17,6 +17,46 @@ from .pdf import NonconformityRow, PhotoItem, build_environmental_report_pdf
 from .serializers import EnvironmentalReportCreateSerializer
 
 
+def _parse_additional_unit_representatives_json(raw: str) -> list[dict[str, str]]:
+    s = (raw or "").strip()
+    if not s:
+        return []
+    try:
+        data = json.loads(s)
+    except json.JSONDecodeError as e:
+        raise ValidationError(
+            {"additional_unit_representatives_json": "Некоректний JSON (очікується масив)"}
+        ) from e
+    if not isinstance(data, list):
+        raise ValidationError({"additional_unit_representatives_json": "Очікується JSON-масив"})
+    out: list[dict[str, str]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        pos = str(item.get("position", "")).strip()
+        name = str(item.get("full_name", "")).strip()
+        if pos or name:
+            out.append({"position": pos, "full_name": name})
+    return out
+
+
+def _additional_reps_for_pdf(report: EnvironmentalReport) -> list[tuple[str, str]]:
+    raw = report.additional_unit_representatives or []
+    if not isinstance(raw, list):
+        return []
+    pairs: list[tuple[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        pairs.append(
+            (
+                str(item.get("position", "") or "").strip(),
+                str(item.get("full_name", "") or "").strip(),
+            )
+        )
+    return pairs
+
+
 class BranchesView(APIView):
     def get(self, request, *args, **kwargs):
         path = Path(__file__).resolve().parent / "branches.json"
@@ -90,6 +130,7 @@ class EnvironmentalReportPdfView(APIView):
             unit_representative_position=report.unit_representative_position,
             nonconformities=nonconf_rows,
             photo_items=photo_items,
+            additional_unit_representatives=_additional_reps_for_pdf(report),
         )
 
         filename = f"environmental-report-{report.report_date:%Y-%m-%d}.pdf"
@@ -107,6 +148,8 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
     - site_name, inspector_full_name, unit_representative_full_name
     - nonconformities_json: JSON array [{order_number, description, corrective_actions, responsible, due_date}]
     - photos: кілька файлів (однакове поле photos)
+    - additional_unit_representatives_json: необов’язково, JSON array
+      [{\"position\": \"...\", \"full_name\": \"...\"}, ...] — додаткові представники підрозділу у блоці підписів
     """
 
     parser_classes = (MultiPartParser, FormParser)
@@ -130,6 +173,9 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
         inspector_full_name = req_str("inspector_full_name")
         unit_representative_position = (data.get("unit_representative_position") or "").strip() or "Начальник дільниці"
         unit_representative_full_name = req_str("unit_representative_full_name")
+        additional_reps = _parse_additional_unit_representatives_json(
+            str(data.get("additional_unit_representatives_json") or "")
+        )
 
         report_date_raw = req_str("report_date")
         try:
@@ -158,6 +204,7 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
             inspector_position=inspector_position,
             unit_representative_full_name=unit_representative_full_name,
             unit_representative_position=unit_representative_position,
+            additional_unit_representatives=additional_reps,
         )
 
         for idx, row in enumerate(nonconf_list, start=1):
@@ -214,6 +261,7 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
             unit_representative_position=report.unit_representative_position,
             nonconformities=nonconf_rows,
             photo_items=photo_items,
+            additional_unit_representatives=_additional_reps_for_pdf(report),
         )
 
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")

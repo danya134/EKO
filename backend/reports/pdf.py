@@ -35,6 +35,8 @@ FONT_BOLD_ITALIC = "TimesNewRoman-BoldItalic"
 
 HEADER_H = 28 * mm
 TABLE_SIDE_GAP = 2 * mm
+# Під таблицею: поле ПІБ — відступ від правого краю текстового поля (як на бланку).
+SIG_PIB_RIGHT_MARGIN = 10 * mm
 
 
 def _candidate_font_paths() -> list[str]:
@@ -246,6 +248,67 @@ def _signature_line(
     return t
 
 
+def _two_signature_lines_row(
+    *,
+    layout_width: float,
+    left_value: str,
+    right_value: str,
+    left_caption: str,
+    right_caption: str,
+    value_style: ParagraphStyle,
+    caption_style: ParagraphStyle,
+    max_width_frac: float = 0.30,
+    min_width: float = 24 * mm,
+    cell_pad_left: float = 5,
+    cell_pad_right: float = 0,
+) -> Table:
+    """Два поля з підкресленням по довжині тексту (як у шапці акту)."""
+    mw = float(layout_width) * max_width_frac
+    left = _signature_line(
+        value=left_value or "",
+        caption=left_caption,
+        value_style=value_style,
+        caption_style=caption_style,
+        max_width=mw,
+        min_width=min_width,
+    )
+    right = _signature_line(
+        value=right_value or "",
+        caption=right_caption,
+        value_style=value_style,
+        caption_style=caption_style,
+        max_width=mw,
+        min_width=min_width,
+    )
+    # На всю ширину аркуша: посада зліва біля поля, ПІБ — біля правого краю (як у бланку).
+    row = Table(
+        [[left, Spacer(1, 1), right]],
+        colWidths=[
+            layout_width * 0.38,
+            layout_width * 0.14,
+            layout_width * 0.48,
+        ],
+    )
+    row.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (0, 0), (0, 0), "LEFT"),
+                ("ALIGN", (2, 0), (2, 0), "RIGHT"),
+                ("LEFTPADDING", (0, 0), (0, 0), cell_pad_left),
+                ("LEFTPADDING", (1, 0), (1, 0), 0),
+                ("LEFTPADDING", (2, 0), (2, 0), 0),
+                ("RIGHTPADDING", (0, 0), (0, 0), 0),
+                ("RIGHTPADDING", (1, 0), (1, 0), 0),
+                ("RIGHTPADDING", (2, 0), (2, 0), cell_pad_right),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]
+        )
+    )
+    return row
+
+
 def _draw_page_header(
     canv: pdfcanvas.Canvas,
     *,
@@ -451,6 +514,7 @@ def build_environmental_report_pdf(
     unit_representative_position: str,
     nonconformities: Iterable[NonconformityRow],
     photo_items: Iterable[PhotoItem],
+    additional_unit_representatives: Iterable[tuple[str, str]] | None = None,
 ) -> bytes:
     ensure_cyrillic_font_registered()
 
@@ -534,6 +598,20 @@ def build_environmental_report_pdf(
         fontSize=12,
         leading=14.5,
     )
+    table_header = ParagraphStyle(
+        "TableHeader",
+        parent=small,
+        alignment=1,  # center
+        leading=14.5,
+    )
+    sig_label = ParagraphStyle(
+        "SigLabel",
+        parent=small,
+        fontSize=12,
+        leading=14.5,
+        alignment=0,
+        spaceAfter=2,
+    )
 
     story = []
 
@@ -546,79 +624,20 @@ def build_environmental_report_pdf(
     form_norm = (inspection_form or "").strip().lower()
     form_acc = "позапланову" if form_norm != "планова" else "планову"
 
-    left_block = Table(
-        [
-            [_p(f"<b>Дата:</b> <b>{report_date:%d.%m.%Y}</b>", label_b)],
-            [_p(f"<b>Перевірку провели:</b> <b><i><u>{form_acc}</u></i></b>", label_b)],
-            [
-                _signature_line(
-                    value=inspector_full_name,
-                    caption="(ПІБ)",
-                    value_style=value_b,
-                    caption_style=caption_sm,
-                    max_width=doc.width * 0.40,
-                )
-            ],
-            [Spacer(1, 8)],
-            [_p("<b>Представник підрозділу:</b>", label_b)],
-            [
-                _signature_line(
-                    value=unit_representative_full_name,
-                    caption="(ПІБ)",
-                    value_style=value_b,
-                    caption_style=caption_sm,
-                    max_width=doc.width * 0.40,
-                )
-            ],
-        ],
-        colWidths=["*"],
-    )
-    left_block.setStyle(
-        TableStyle(
-            [
-                ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 0),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-            ]
-        )
-    )
-
     inspector_position = (inspector_position or "").strip() or "Провідний Еколог"
     unit_rep_position = (unit_representative_position or "").strip() or "Начальник дільниці"
 
-    # Пара "ПІБ + Посада" в одному рядку, щоб були на одному рівні
+    # Пара "ПІБ + Посада" в одному рядку — підкреслення по довжині тексту (як знизу під таблицею).
     def _pib_posada_row(*, pib: str, posada: str) -> Table:
-        cell_pib = _signature_line(
-            value=pib,
-            caption="(ПІБ)",
+        return _two_signature_lines_row(
+            layout_width=doc.width,
+            left_value=pib,
+            right_value=posada,
+            left_caption="(ПІБ)",
+            right_caption="(Посада)",
             value_style=value_b,
             caption_style=caption_sm,
-            max_width=doc.width * 0.30,
-            min_width=24 * mm,
         )
-        cell_posada = _signature_line(
-            value=posada,
-            caption="(Посада)",
-            value_style=value_b,
-            caption_style=caption_sm,
-            max_width=doc.width * 0.30,
-            min_width=24 * mm,
-        )
-        # Зсуваємо "посаду" правіше: додаємо проміжну колонку-спейсер
-        row = Table([[cell_pib, Spacer(1, 1), cell_posada]], colWidths=[doc.width * 0.24, doc.width * 0.10, doc.width * 0.26])
-        row.setStyle(
-            TableStyle(
-                [
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                    ("TOPPADDING", (0, 0), (-1, -1), 0),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-                ]
-            )
-        )
-        return row
 
     # Лівий блок: підписи в рядок, відступ зліва як у лейблів
     left_pad = 4 * mm
@@ -664,11 +683,11 @@ def build_environmental_report_pdf(
     rows = list(nonconformities)
     table_data = [
         [
-            _p("<b>№ п/п</b>", small),
-            _p("<b>Опис невідповідності</b>", small),
-            _p("<b>Коригуючі дії</b>", small),
-            _p("<b>Відповідальний</b>", small),
-            _p("<b>Строк виконання</b>", small),
+            _p("<b>№ п/п</b>", table_header),
+            _p("<b>Виявлена невідповідність</b>", table_header),
+            _p("<b>Коригуючі дії</b>", table_header),
+            _p("<b>Відповідальний виконавець</b>", table_header),
+            _p("<b>Строк виконання</b>", table_header),
         ]
     ]
 
@@ -697,7 +716,8 @@ def build_environmental_report_pdf(
                 ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
                 ("FONTSIZE", (0, 0), (-1, -1), 12),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("ALIGN", (0, 0), (0, -1), "CENTER"),
+                ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                ("ALIGN", (0, 1), (0, -1), "CENTER"),
                 ("GRID", (0, 0), (-1, -1), 0.6, colors.black),
                 ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
                 ("LEFTPADDING", (0, 0), (-1, -1), 3),
@@ -709,6 +729,61 @@ def build_environmental_report_pdf(
     )
 
     story.append(tbl)
+
+    # Підписи під таблицею (бланк)
+    story.append(Spacer(1, 12))
+    story.append(_p("Підписи:", label_b))
+    story.append(Spacer(1, 6))
+
+    story.append(_p("Перевіряючий (посада)", sig_label))
+    story.append(
+        _two_signature_lines_row(
+            layout_width=doc.width,
+            left_value=inspector_position or "",
+            right_value=inspector_full_name or "",
+            left_caption="(Посада)",
+            right_caption="(ПІБ)",
+            value_style=value_b,
+            caption_style=caption_sm,
+            cell_pad_right=SIG_PIB_RIGHT_MARGIN,
+        )
+    )
+    story.append(Spacer(1, 10))
+
+    story.append(_p("Представник підрозділу (посада)", sig_label))
+    story.append(
+        _two_signature_lines_row(
+            layout_width=doc.width,
+            left_value=unit_representative_position or "",
+            right_value=unit_representative_full_name or "",
+            left_caption="(Посада)",
+            right_caption="(ПІБ)",
+            value_style=value_b,
+            caption_style=caption_sm,
+            cell_pad_right=SIG_PIB_RIGHT_MARGIN,
+        )
+    )
+
+    extras = list(additional_unit_representatives or [])
+    for pos, full_name in extras:
+        pos_s = (pos or "").strip()
+        name_s = (full_name or "").strip()
+        if not pos_s and not name_s:
+            continue
+        story.append(Spacer(1, 10))
+        story.append(_p("Представник підрозділу (посада)", sig_label))
+        story.append(
+            _two_signature_lines_row(
+                layout_width=doc.width,
+                left_value=pos_s,
+                right_value=name_s,
+                left_caption="(Посада)",
+                right_caption="(ПІБ)",
+                value_style=value_b,
+                caption_style=caption_sm,
+                cell_pad_right=SIG_PIB_RIGHT_MARGIN,
+            )
+        )
 
     photos = list(photo_items)
     if photos:
