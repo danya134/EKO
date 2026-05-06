@@ -15,6 +15,8 @@ import {
   HStack,
   IconButton,
   Input,
+  InputGroup,
+  InputLeftElement,
   Select,
   Text,
   Textarea,
@@ -62,13 +64,6 @@ function emptyAdditionalRep() {
   return { position: '', fullName: '' }
 }
 
-function formatDateLabel(value) {
-  if (!value) return 'Обрати дату'
-  const [year, month, day] = value.split('-')
-  if (!year || !month || !day) return value
-  return `${day}.${month}.${year}`
-}
-
 function SectionHeader({ eyebrow, title, description }) {
   return (
     <VStack align="stretch" spacing={1}>
@@ -92,67 +87,6 @@ function SectionHeader({ eyebrow, title, description }) {
         </Text>
       ) : null}
     </VStack>
-  )
-}
-
-function ThemedDateInput({ value, onChange, placeholder = 'Обрати дату' }) {
-  const inputRef = useRef(null)
-
-  const openPicker = () => {
-    const input = inputRef.current
-    if (!input) return
-
-    if (typeof input.showPicker === 'function') {
-      try {
-        input.showPicker()
-        return
-      } catch {
-        // Some browsers allow showPicker only for direct user gestures.
-      }
-    }
-
-    input.focus()
-    input.click()
-  }
-
-  return (
-    <Box position="relative">
-      <Input
-        ref={inputRef}
-        type="date"
-        value={value}
-        onChange={onChange}
-        aria-label={placeholder}
-        position="absolute"
-        w="1px"
-        h="1px"
-        opacity={0}
-        pointerEvents="none"
-      />
-      <Button
-        type="button"
-        variant="outline"
-        minH={MIN_TAP_H}
-        w="full"
-        justifyContent="space-between"
-        bg="#fbfaf7"
-        borderColor="blackAlpha.300"
-        color="#1f2933"
-        fontWeight="700"
-        onClick={openPicker}
-        _hover={{ bg: '#f2eadc', borderColor: '#2f4f6f' }}
-      >
-        <HStack spacing={3}>
-          <Badge bg="#e9dfca" color="#4f432d" borderRadius="full" px={2}>
-            Дата
-          </Badge>
-          <Text>{value ? formatDateLabel(value) : placeholder}</Text>
-        </HStack>
-        <Text color="#2f4f6f" fontSize="sm">
-          Обрати
-        </Text>
-      </Button>
-    </Box>
   )
 }
 
@@ -264,10 +198,6 @@ function App() {
   const resetPhotos = () => {
     setPhotos([])
     if (fileInputRef.current) fileInputRef.current.value = ''
-  }
-
-  const openPhotoPicker = () => {
-    fileInputRef.current?.click()
   }
 
   const downloadBlob = (blob, filename) => {
@@ -396,7 +326,19 @@ function App() {
                   </FormControl>
                   <FormControl>
                     <FormLabel>Дата</FormLabel>
-                    <ThemedDateInput value={reportDate} onChange={(e) => setReportDate(e.target.value)} />
+                    <InputGroup>
+                      <InputLeftElement h={MIN_TAP_H} pointerEvents="none" color="#2f4f6f">
+                        📅
+                      </InputLeftElement>
+                      <Input
+                        minH={MIN_TAP_H}
+                        type="date"
+                        value={reportDate}
+                        onChange={(e) => setReportDate(e.target.value)}
+                        pl={10}
+                        {...FIELD_PROPS}
+                      />
+                    </InputGroup>
                   </FormControl>
                 </HStack>
               </VStack>
@@ -610,11 +552,19 @@ function App() {
 
                           <FormControl>
                             <FormLabel>Термін</FormLabel>
-                            <ThemedDateInput
-                              value={r.due_date}
-                              onChange={(e) => updateRow(idx, { due_date: e.target.value })}
-                              placeholder="Обрати термін"
-                            />
+                            <InputGroup>
+                              <InputLeftElement h={MIN_TAP_H} pointerEvents="none" color="#2f4f6f">
+                                📅
+                              </InputLeftElement>
+                              <Input
+                                minH={MIN_TAP_H}
+                                type="date"
+                                value={r.due_date}
+                                onChange={(e) => updateRow(idx, { due_date: e.target.value })}
+                                pl={10}
+                                {...FIELD_PROPS}
+                              />
+                            </InputGroup>
                           </FormControl>
                         </VStack>
                       </CardBody>
@@ -634,40 +584,14 @@ function App() {
                   <FormLabel>Завантажити фото порушень</FormLabel>
                   <Input
                     ref={fileInputRef}
+                    minH={MIN_TAP_H}
                     type="file"
                     multiple
                     accept="image/*"
                     onChange={onPhotosChange}
-                    display="none"
+                    p={2}
+                    {...FIELD_PROPS}
                   />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    minH="64px"
-                    w="full"
-                    justifyContent="space-between"
-                    bg="#fbfaf7"
-                    borderColor="blackAlpha.300"
-                    color="#1f2933"
-                    px={4}
-                    onClick={openPhotoPicker}
-                    _hover={{ bg: '#f2eadc', borderColor: '#2f4f6f' }}
-                  >
-                    <HStack spacing={3} textAlign="left">
-                      <Badge bg="#e9dfca" color="#4f432d" borderRadius="full" px={2}>
-                        ФОТО
-                      </Badge>
-                      <Box>
-                        <Text fontWeight="700">{photos.length ? 'Фото додано' : 'Обрати фото'}</Text>
-                        <Text fontSize="xs" color="gray.600" fontWeight="500">
-                          {photos.length ? `${photos.length} файл(ів) готово до PDF` : 'Можна вибрати кілька зображень'}
-                        </Text>
-                      </Box>
-                    </HStack>
-                    <Text color="#2f4f6f" fontSize="sm" fontWeight="700">
-                      Огляд
-                    </Text>
-                  </Button>
                   {photos.length ? (
                     <Text fontSize="sm" color="gray.600" mt={2}>
                       Обрано: {photos.length} фото
