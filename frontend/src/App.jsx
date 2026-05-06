@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   AlertIcon,
+  Badge,
   Box,
   Button,
   Card,
@@ -22,6 +23,22 @@ import {
 
 const MIN_TAP_H = '44px'
 const API_BASE = import.meta.env.VITE_API_BASE_URL || `http://${window.location.hostname}:8000`
+const CARD_PROPS = {
+  bg: 'white',
+  borderColor: 'blackAlpha.200',
+  overflow: 'hidden',
+}
+const INNER_CARD_PROPS = {
+  variant: 'outline',
+  bg: '#faf8f3',
+  borderColor: 'blackAlpha.200',
+  boxShadow: 'none',
+}
+const FIELD_PROPS = {
+  bg: 'white',
+  borderColor: 'blackAlpha.300',
+  _hover: { borderColor: 'blackAlpha.500' },
+}
 
 const BRANCH_OPTIONS_FALLBACK = ['Філія 1', 'Філія 2', 'Філія 3']
 
@@ -43,6 +60,100 @@ function emptyRow(orderNumber) {
 
 function emptyAdditionalRep() {
   return { position: '', fullName: '' }
+}
+
+function formatDateLabel(value) {
+  if (!value) return 'Обрати дату'
+  const [year, month, day] = value.split('-')
+  if (!year || !month || !day) return value
+  return `${day}.${month}.${year}`
+}
+
+function SectionHeader({ eyebrow, title, description }) {
+  return (
+    <VStack align="stretch" spacing={1}>
+      <Badge
+        alignSelf="flex-start"
+        bg="#e9dfca"
+        color="#4f432d"
+        borderRadius="full"
+        px={3}
+        py={1}
+        letterSpacing="0.08em"
+      >
+        {eyebrow}
+      </Badge>
+      <Heading size="md" color="#1f2933">
+        {title}
+      </Heading>
+      {description ? (
+        <Text fontSize="sm" color="gray.600">
+          {description}
+        </Text>
+      ) : null}
+    </VStack>
+  )
+}
+
+function ThemedDateInput({ value, onChange, placeholder = 'Обрати дату' }) {
+  const inputRef = useRef(null)
+
+  const openPicker = () => {
+    const input = inputRef.current
+    if (!input) return
+
+    if (typeof input.showPicker === 'function') {
+      try {
+        input.showPicker()
+        return
+      } catch {
+        // Some browsers allow showPicker only for direct user gestures.
+      }
+    }
+
+    input.focus()
+    input.click()
+  }
+
+  return (
+    <Box position="relative">
+      <Input
+        ref={inputRef}
+        type="date"
+        value={value}
+        onChange={onChange}
+        aria-label={placeholder}
+        position="absolute"
+        w="1px"
+        h="1px"
+        opacity={0}
+        pointerEvents="none"
+      />
+      <Button
+        type="button"
+        variant="outline"
+        minH={MIN_TAP_H}
+        w="full"
+        justifyContent="space-between"
+        bg="#fbfaf7"
+        borderColor="blackAlpha.300"
+        color="#1f2933"
+        fontWeight="700"
+        onClick={openPicker}
+        _hover={{ bg: '#f2eadc', borderColor: '#2f4f6f' }}
+      >
+        <HStack spacing={3}>
+          <Badge bg="#e9dfca" color="#4f432d" borderRadius="full" px={2}>
+            Дата
+          </Badge>
+          <Text>{value ? formatDateLabel(value) : placeholder}</Text>
+        </HStack>
+        <Text color="#2f4f6f" fontSize="sm">
+          Обрати
+        </Text>
+      </Button>
+    </Box>
+  )
 }
 
 function App() {
@@ -155,6 +266,10 @@ function App() {
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
+  const openPhotoPicker = () => {
+    fileInputRef.current?.click()
+  }
+
   const downloadBlob = (blob, filename) => {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -221,13 +336,20 @@ function App() {
   }
 
   return (
-    <Box bg="white" color="gray.900" minH="100vh">
-      <Container maxW="md" py={4}>
-        <VStack align="stretch" spacing={4}>
-          <Box>
-            <Heading size="md">Екологічний звіт (Акт перевірки)</Heading>
-            <Text fontSize="sm" color="gray.600" mt={1}>
-              Мобільна форма для генерації PDF
+    <Box
+      bg="linear-gradient(180deg, #f4f1ec 0%, #ebe4d8 100%)"
+      color="gray.900"
+      minH="100vh"
+      py={{ base: 4, md: 8 }}
+    >
+      <Container maxW="3xl" px={{ base: 3, md: 6 }}>
+        <VStack align="stretch" spacing={5}>
+          <Box bg="#1f2933" color="white" borderRadius="28px" px={{ base: 5, md: 8 }} py={{ base: 6, md: 8 }}>
+            <Heading size={{ base: 'lg', md: 'xl' }} lineHeight="1.1">
+              Екологічний звіт
+            </Heading>
+            <Text fontSize={{ base: 'sm', md: 'md' }} color="whiteAlpha.800" mt={2} maxW="560px">
+              Строга форма акта перевірки з усіма даними для швидкого формування PDF.
             </Text>
           </Box>
 
@@ -240,14 +362,14 @@ function App() {
             </Alert>
           ) : null}
 
-          <Card variant="outline">
+          <Card variant="outline" {...CARD_PROPS}>
             <CardBody>
-              <VStack align="stretch" spacing={3}>
-                <Heading size="sm">Шапка</Heading>
+              <VStack align="stretch" spacing={4}>
+                <SectionHeader eyebrow="01" title="Шапка документа" description="Філія, редакція та дата акта." />
 
                 <FormControl>
                   <FormLabel>Філія</FormLabel>
-                  <Input minH={MIN_TAP_H} value={branch} onChange={(e) => setBranch(e.target.value)} />
+                  <Input minH={MIN_TAP_H} value={branch} onChange={(e) => setBranch(e.target.value)} {...FIELD_PROPS} />
                   <Select
                     mt={2}
                     minH={MIN_TAP_H}
@@ -256,6 +378,8 @@ function App() {
                       if (e.target.value) setBranch(e.target.value)
                     }}
                     value=""
+                    bg="white"
+                    borderColor="blackAlpha.300"
                   >
                     {branchOptions.map((b) => (
                       <option key={b} value={b}>
@@ -268,30 +392,29 @@ function App() {
                 <HStack spacing={3} align="start">
                   <FormControl>
                     <FormLabel>Редакція</FormLabel>
-                    <Input minH={MIN_TAP_H} value={revision} onChange={(e) => setRevision(e.target.value)} />
+                    <Input minH={MIN_TAP_H} value={revision} onChange={(e) => setRevision(e.target.value)} {...FIELD_PROPS} />
                   </FormControl>
                   <FormControl>
                     <FormLabel>Дата</FormLabel>
-                    <Input
-                      minH={MIN_TAP_H}
-                      type="date"
-                      value={reportDate}
-                      onChange={(e) => setReportDate(e.target.value)}
-                    />
+                    <ThemedDateInput value={reportDate} onChange={(e) => setReportDate(e.target.value)} />
                   </FormControl>
                 </HStack>
               </VStack>
             </CardBody>
           </Card>
 
-          <Card variant="outline">
+          <Card variant="outline" {...CARD_PROPS}>
             <CardBody>
-              <VStack align="stretch" spacing={3}>
-                <Heading size="sm">Основні дані</Heading>
+              <VStack align="stretch" spacing={4}>
+                <SectionHeader
+                  eyebrow="02"
+                  title="Основні дані"
+                  description="Підрозділ, формат перевірки та відповідальні особи."
+                />
 
                 <FormControl isRequired>
                   <FormLabel>Назва підрозділу</FormLabel>
-                  <Input minH={MIN_TAP_H} value={siteName} onChange={(e) => setSiteName(e.target.value)} />
+                  <Input minH={MIN_TAP_H} value={siteName} onChange={(e) => setSiteName(e.target.value)} {...FIELD_PROPS} />
                   <Select
                     mt={2}
                     minH={MIN_TAP_H}
@@ -301,6 +424,8 @@ function App() {
                     }}
                     value=""
                     isDisabled={!siteOptions.length}
+                    bg="white"
+                    borderColor="blackAlpha.300"
                   >
                     {siteOptions.map((s) => (
                       <option key={s} value={s}>
@@ -312,7 +437,13 @@ function App() {
 
                 <FormControl isRequired>
                   <FormLabel>Форма перевірки</FormLabel>
-                  <Select minH={MIN_TAP_H} value={inspectionForm} onChange={(e) => setInspectionForm(e.target.value)}>
+                  <Select
+                    minH={MIN_TAP_H}
+                    value={inspectionForm}
+                    onChange={(e) => setInspectionForm(e.target.value)}
+                    bg="white"
+                    borderColor="blackAlpha.300"
+                  >
                     <option value="планова">планова</option>
                     <option value="позапланова">позапланова</option>
                   </Select>
@@ -325,6 +456,7 @@ function App() {
                     placeholder="Введіть ПІБ"
                     value={inspectorFullName}
                     onChange={(e) => setInspectorFullName(e.target.value)}
+                    {...FIELD_PROPS}
                   />
                 </FormControl>
 
@@ -335,6 +467,7 @@ function App() {
                     placeholder="Введіть посаду"
                     value={inspectorPosition}
                     onChange={(e) => setInspectorPosition(e.target.value)}
+                    {...FIELD_PROPS}
                   />
                 </FormControl>
 
@@ -345,6 +478,7 @@ function App() {
                     placeholder="Введіть ПІБ"
                     value={unitRepFullName}
                     onChange={(e) => setUnitRepFullName(e.target.value)}
+                    {...FIELD_PROPS}
                   />
                 </FormControl>
 
@@ -355,6 +489,7 @@ function App() {
                     placeholder="Введіть посаду"
                     value={unitRepPosition}
                     onChange={(e) => setUnitRepPosition(e.target.value)}
+                    {...FIELD_PROPS}
                   />
                 </FormControl>
 
@@ -366,17 +501,13 @@ function App() {
                     minH={MIN_TAP_H}
                     alignSelf="flex-start"
                     onClick={addAdditionalRep}
+                    borderColor="#2f4f6f"
+                    color="#2f4f6f"
                   >
                     + Ще представник підрозділу
                   </Button>
-                  {additionalReps.length ? (
-                    <Text fontSize="sm" color="gray.600">
-                      Додаткові представники (посада та ПІБ) — у PDF під основним представником, по одному блоку на
-                      кожного.
-                    </Text>
-                  ) : null}
                   {additionalReps.map((r, idx) => (
-                    <Card key={idx} variant="outline" bg="gray.50">
+                    <Card key={idx} {...INNER_CARD_PROPS}>
                       <CardBody>
                         <VStack align="stretch" spacing={3}>
                           <HStack justify="space-between" align="center">
@@ -397,6 +528,7 @@ function App() {
                               placeholder="Введіть посаду"
                               value={r.position}
                               onChange={(e) => updateAdditionalRep(idx, { position: e.target.value })}
+                              {...FIELD_PROPS}
                             />
                           </FormControl>
                           <FormControl>
@@ -406,6 +538,7 @@ function App() {
                               placeholder="Введіть ПІБ"
                               value={r.fullName}
                               onChange={(e) => updateAdditionalRep(idx, { fullName: e.target.value })}
+                              {...FIELD_PROPS}
                             />
                           </FormControl>
                         </VStack>
@@ -417,19 +550,19 @@ function App() {
             </CardBody>
           </Card>
 
-          <Card variant="outline">
+          <Card variant="outline" {...CARD_PROPS}>
             <CardBody>
-              <VStack align="stretch" spacing={3}>
+              <VStack align="stretch" spacing={4}>
                 <HStack justify="space-between">
-                  <Heading size="sm">Невідповідності</Heading>
-                  <Button minH={MIN_TAP_H} colorScheme="blue" variant="outline" onClick={addRow}>
+                  <SectionHeader eyebrow="03" title="Невідповідності" />
+                  <Button minH={MIN_TAP_H} bg="#2f4f6f" color="white" _hover={{ bg: '#263f59' }} onClick={addRow}>
                     Додати рядок
                   </Button>
                 </HStack>
 
                 <VStack align="stretch" spacing={3}>
                   {rows.map((r, idx) => (
-                    <Card key={idx} variant="outline" bg="gray.50">
+                    <Card key={idx} {...INNER_CARD_PROPS}>
                       <CardBody>
                         <VStack align="stretch" spacing={3}>
                           <HStack justify="space-between" align="center">
@@ -451,6 +584,7 @@ function App() {
                               minH="96px"
                               value={r.description}
                               onChange={(e) => updateRow(idx, { description: e.target.value })}
+                              {...FIELD_PROPS}
                             />
                           </FormControl>
 
@@ -460,6 +594,7 @@ function App() {
                               minH="80px"
                               value={r.corrective_actions}
                               onChange={(e) => updateRow(idx, { corrective_actions: e.target.value })}
+                              {...FIELD_PROPS}
                             />
                           </FormControl>
 
@@ -469,16 +604,16 @@ function App() {
                               minH={MIN_TAP_H}
                               value={r.responsible}
                               onChange={(e) => updateRow(idx, { responsible: e.target.value })}
+                              {...FIELD_PROPS}
                             />
                           </FormControl>
 
                           <FormControl>
                             <FormLabel>Термін</FormLabel>
-                            <Input
-                              minH={MIN_TAP_H}
-                              type="date"
+                            <ThemedDateInput
                               value={r.due_date}
                               onChange={(e) => updateRow(idx, { due_date: e.target.value })}
+                              placeholder="Обрати термін"
                             />
                           </FormControl>
                         </VStack>
@@ -490,23 +625,49 @@ function App() {
             </CardBody>
           </Card>
 
-          <Card variant="outline">
+          <Card variant="outline" {...CARD_PROPS}>
             <CardBody>
-              <VStack align="stretch" spacing={3}>
-                <Heading size="sm">Фотофіксація</Heading>
+              <VStack align="stretch" spacing={4}>
+                <SectionHeader eyebrow="04" title="Фотофіксація" description="Додайте фото порушень до матеріалів акта." />
 
                 <FormControl>
                   <FormLabel>Завантажити фото порушень</FormLabel>
                   <Input
                     ref={fileInputRef}
-                    minH={MIN_TAP_H}
                     type="file"
                     multiple
                     accept="image/*"
                     onChange={onPhotosChange}
-                    p={2}
-                    bg="white"
+                    display="none"
                   />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    minH="64px"
+                    w="full"
+                    justifyContent="space-between"
+                    bg="#fbfaf7"
+                    borderColor="blackAlpha.300"
+                    color="#1f2933"
+                    px={4}
+                    onClick={openPhotoPicker}
+                    _hover={{ bg: '#f2eadc', borderColor: '#2f4f6f' }}
+                  >
+                    <HStack spacing={3} textAlign="left">
+                      <Badge bg="#e9dfca" color="#4f432d" borderRadius="full" px={2}>
+                        ФОТО
+                      </Badge>
+                      <Box>
+                        <Text fontWeight="700">{photos.length ? 'Фото додано' : 'Обрати фото'}</Text>
+                        <Text fontSize="xs" color="gray.600" fontWeight="500">
+                          {photos.length ? `${photos.length} файл(ів) готово до PDF` : 'Можна вибрати кілька зображень'}
+                        </Text>
+                      </Box>
+                    </HStack>
+                    <Text color="#2f4f6f" fontSize="sm" fontWeight="700">
+                      Огляд
+                    </Text>
+                  </Button>
                   {photos.length ? (
                     <Text fontSize="sm" color="gray.600" mt={2}>
                       Обрано: {photos.length} фото
@@ -527,7 +688,9 @@ function App() {
 
           <Button
             minH={MIN_TAP_H}
-            colorScheme="blue"
+            bg="#1f2933"
+            color="white"
+            _hover={{ bg: '#111827' }}
             size="lg"
             isLoading={submitting}
             loadingText="Формую PDF…"
