@@ -297,9 +297,9 @@ def _two_signature_lines_row(
         align_right_col = "LEFT"
     else:
         col_widths = [
-            layout_width * 0.38,
-            layout_width * 0.14,
-            layout_width * 0.48,
+            layout_width * 0.45,
+            layout_width * 0.10,
+            layout_width * 0.45,
         ]
         align_right_col = "RIGHT"
     row = Table([[left, Spacer(1, 1), right]], colWidths=col_widths)
@@ -652,10 +652,11 @@ def build_environmental_report_pdf(
             value_style=value_b,
             caption_style=caption_sm,
             fixed_gap_between_fields=True,
+            min_width=60 * mm,
         )
 
     # Лівий блок: підписи в рядок, відступ зліва як у лейблів
-    left_pad = 4 * mm
+    left_pad = 3 * mm
     left_block = Table(
         [
             [_p(f"<b>Дата:</b> <b>{report_date:%d.%m.%Y}</b>", label_b)],
