@@ -37,6 +37,8 @@ HEADER_H = 28 * mm
 TABLE_SIDE_GAP = 2 * mm
 # Під таблицею: поле ПІБ — відступ від правого краю текстового поля (як на бланку).
 SIG_PIB_RIGHT_MARGIN = 10 * mm
+# Горизонтальна відстань між підкресленими полями «ПІБ» і «Посада» (шапка та блок підписів).
+PIB_POSADA_HORIZONTAL_GAP = 30 * mm
 
 
 def _candidate_font_paths() -> list[str]:
@@ -261,8 +263,16 @@ def _two_signature_lines_row(
     min_width: float = 24 * mm,
     cell_pad_left: float = 5,
     cell_pad_right: float = 0,
+    fixed_gap_between_fields: bool = False,
 ) -> Table:
-    """Два поля з підкресленням по довжині тексту (як у шапці акту)."""
+    """Два поля з підкресленням по довжині тексту (як у шапці акту).
+
+    fixed_gap_between_fields=True — ширина полів по тексту, між ними PIB_POSADA_HORIZONTAL_GAP
+    (шапка акту: ПІБ і посада ближче одне до одного).
+
+    fixed_gap_between_fields=False — рядок на всю ширину сторінки, праве поле вирівняне вправо
+    (блок «Підписи» під таблицею, як на бланку).
+    """
     mw = float(layout_width) * max_width_frac
     left = _signature_line(
         value=left_value or "",
@@ -280,21 +290,25 @@ def _two_signature_lines_row(
         max_width=mw,
         min_width=min_width,
     )
-    # На всю ширину аркуша: посада зліва біля поля, ПІБ — біля правого краю (як у бланку).
-    row = Table(
-        [[left, Spacer(1, 1), right]],
-        colWidths=[
+    if fixed_gap_between_fields:
+        lw = float(left._colWidths[0])
+        rw = float(right._colWidths[0])
+        col_widths = [lw, PIB_POSADA_HORIZONTAL_GAP, rw]
+        align_right_col = "LEFT"
+    else:
+        col_widths = [
             layout_width * 0.38,
             layout_width * 0.14,
             layout_width * 0.48,
-        ],
-    )
+        ]
+        align_right_col = "RIGHT"
+    row = Table([[left, Spacer(1, 1), right]], colWidths=col_widths)
     row.setStyle(
         TableStyle(
             [
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("ALIGN", (0, 0), (0, 0), "LEFT"),
-                ("ALIGN", (2, 0), (2, 0), "RIGHT"),
+                ("ALIGN", (2, 0), (2, 0), align_right_col),
                 ("LEFTPADDING", (0, 0), (0, 0), cell_pad_left),
                 ("LEFTPADDING", (1, 0), (1, 0), 0),
                 ("LEFTPADDING", (2, 0), (2, 0), 0),
@@ -637,6 +651,7 @@ def build_environmental_report_pdf(
             right_caption="(Посада)",
             value_style=value_b,
             caption_style=caption_sm,
+            fixed_gap_between_fields=True,
         )
 
     # Лівий блок: підписи в рядок, відступ зліва як у лейблів
