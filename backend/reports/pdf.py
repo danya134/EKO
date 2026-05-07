@@ -291,9 +291,12 @@ def _two_signature_lines_row(
         min_width=min_width,
     )
     if fixed_gap_between_fields:
-        lw = float(left._colWidths[0])
-        rw = float(right._colWidths[0])
-        col_widths = [lw, PIB_POSADA_HORIZONTAL_GAP, rw]
+        # Фіксуємо X-позицію правого поля: ширина лівої колонки стала (mw),
+        # тому "Посада" у шапці завжди починається в одному й тому ж місці.
+        gap = float(PIB_POSADA_HORIZONTAL_GAP)
+        left_col_w = mw
+        right_col_w = max(1.0, float(layout_width) - left_col_w - gap)
+        col_widths = [left_col_w, gap, right_col_w]
         align_right_col = "LEFT"
     else:
         col_widths = [
@@ -805,8 +808,8 @@ def build_environmental_report_pdf(
     if photos:
         story.append(PageBreak())
         max_w = doc.width
-        # Залишаємо трохи місця під відступи/спейсери, щоб не ловити LayoutError на межі.
-        max_h = max(1.0, doc.height - 20)
+        # Залишаємо місце під Spacer і невеликий буфер, щоб велике фото не виштовхувало блок на нову сторінку.
+        max_h = max(1.0, doc.height - 14 - 24)
         photo_blocks = []
         for p in photos:
             block = []
