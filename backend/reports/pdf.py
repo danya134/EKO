@@ -329,6 +329,7 @@ def _two_signature_lines_row(
 def _draw_page_header(
     canv: pdfcanvas.Canvas,
     *,
+    doc_kind: str = "act",
     branch: str,
     revision: str,
     report_date: date,
@@ -434,7 +435,14 @@ def _draw_page_header(
     branch_tbl.drawOn(canv, x0, y0 + grid_h)
 
     # Середня верхня комірка — як на фото (можна буде винести в поле пізніше)
-    mid_top_text = "Ф-15-01 Акт перевірки виробничої діяльності щодо дотримання вимог природоохоронного законодавства"
+    kind = (doc_kind or "act").strip().lower()
+    if kind not in {"act", "report"}:
+        kind = "act"
+    mid_top_text = (
+        "Ф-15-01 Звіт з перевірки виробничої діяльності щодо дотримання вимог природоохоронного законодавства"
+        if kind == "report"
+        else "Ф-15-01 Акт перевірки виробничої діяльності щодо дотримання вимог природоохоронного законодавства"
+    )
     left_top = _fit_paragraph(
         f"Редакція документа: {revision or '-'}",
         base_size=12,
@@ -520,6 +528,7 @@ class _NumberedCanvas(pdfcanvas.Canvas):
 
 def build_environmental_report_pdf(
     *,
+    doc_kind: str = "act",
     branch: str,
     revision: str,
     report_date: date,
@@ -534,6 +543,10 @@ def build_environmental_report_pdf(
     additional_unit_representatives: Iterable[tuple[str, str]] | None = None,
 ) -> bytes:
     ensure_cyrillic_font_registered()
+
+    kind = (doc_kind or "act").strip().lower()
+    if kind not in {"act", "report"}:
+        kind = "act"
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -633,8 +646,8 @@ def build_environmental_report_pdf(
     story = []
 
     # Блок під колонтитулом (макет як у Word-зразку)
-    story.append(_p("<b><i>Акт</i></b>", title_1))
-    story.append(_p("<i><u>перевірки виробничої діяльності</u></i>", title_2))
+    story.append(_p("<b><i>Звіт</i></b>" if kind == "report" else "<b><i>Акт</i></b>", title_1))
+    story.append(_p("<i><u>з перевірки виробничої діяльності</u></i>" if kind == "report" else "<i><u>перевірки виробничої діяльності</u></i>", title_2))
     story.append(_p("<i><u>щодо дотримання вимог природоохоронного законодавства</u></i>", title_2))
     story.append(Spacer(1, 10))
 
@@ -824,6 +837,7 @@ def build_environmental_report_pdf(
         revision=revision,
         report_date=report_date,
         site_name=site_name,
+        doc_kind=kind,
         left_margin=doc.leftMargin,
         right_margin=doc.rightMargin,
     )

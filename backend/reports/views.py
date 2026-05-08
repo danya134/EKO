@@ -74,17 +74,111 @@ class UnitsView(APIView):
     def get(self, request, *args, **kwargs):
         branch = (request.query_params.get("branch") or "").strip()
         path = Path(__file__).resolve().parent / "units.json"
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
+        data = _load_json(path, default={})
         if not isinstance(data, dict):
             data = {}
         units = data.get(branch, [])
         if not isinstance(units, list):
             units = []
-        units = [u for u in units if isinstance(u, str)]
-        return Response(units, status=status.HTTP_200_OK)
+
+        # Підтримуємо 2 формати:
+        # 1) ["Назва дільниці", ...]
+        # 2) [{"name": "...", "position": "...", "full_name": "..."}, ...]
+        out: list[str] = []
+        for u in units:
+            if isinstance(u, str):
+                name = u.strip()
+                if name:
+                    out.append(name)
+                continue
+            if isinstance(u, dict):
+                name = str(u.get("name") or "").strip()
+                if name:
+                    out.append(name)
+                continue
+        return Response(out, status=status.HTTP_200_OK)
+
+
+class NonconformityDescriptionsView(APIView):
+    def get(self, request, *args, **kwargs):
+        path = Path(__file__).resolve().parent / "nonconformity_descriptions.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = []
+        if not isinstance(data, list):
+            data = []
+        data = [x for x in data if isinstance(x, str) and x.strip()]
+        return Response(data, status=status.HTTP_200_OK)
+
+
+class CorrectiveActionsView(APIView):
+    def get(self, request, *args, **kwargs):
+        path = Path(__file__).resolve().parent / "corrective_actions.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = []
+        if not isinstance(data, list):
+            data = []
+        data = [x for x in data if isinstance(x, str) and x.strip()]
+        return Response(data, status=status.HTTP_200_OK)
+
+
+def _load_json(path: Path, *, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+class InspectorAutofillView(APIView):
+    def get(self, request, *args, **kwargs):
+        branch = (request.query_params.get("branch") or "").strip()
+        path = Path(__file__).resolve().parent / "inspector_autofill.json"
+        data = _load_json(path, default={})
+        if not isinstance(data, dict):
+            data = {}
+        item = data.get(branch, {}) if branch else {}
+        if not isinstance(item, dict):
+            item = {}
+        return Response(
+            {
+                "position": str(item.get("position") or "").strip(),
+                "full_name": str(item.get("full_name") or "").strip(),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class UnitRepresentativeAutofillView(APIView):
+    def get(self, request, *args, **kwargs):
+        branch = (request.query_params.get("branch") or "").strip()
+        unit = (request.query_params.get("unit") or "").strip()
+        path = Path(__file__).resolve().parent / "units.json"
+        data = _load_json(path, default={})
+        if not isinstance(data, dict):
+            data = {}
+
+        units = data.get(branch, []) if branch else []
+        if not isinstance(units, list):
+            units = []
+
+        item: dict = {}
+        if unit:
+            for u in units:
+                if isinstance(u, dict):
+                    name = str(u.get("name") or "").strip()
+                    if name == unit:
+                        item = u
+                        break
+        return Response(
+            {
+                "position": str(item.get("position") or "").strip(),
+                "full_name": str(item.get("full_name") or "").strip(),
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class EnvironmentalReportPdfView(APIView):
@@ -166,6 +260,9 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
         branch = req_str("branch")
         revision = (data.get("revision") or "").strip()
         site_name = req_str("site_name")
+        doc_kind = (data.get("doc_kind") or "").strip().lower() or "act"
+        if doc_kind not in {"act", "report"}:
+            doc_kind = "act"
         inspection_form = (data.get("inspection_form") or "").strip()
         if inspection_form not in {"планова", "позапланова"}:
             inspection_form = "позапланова"
@@ -250,6 +347,7 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
         photo_items = [PhotoItem(caption=p.caption, image_path=p.image.path) for p in report.photos.all()]
 
         pdf_bytes = build_environmental_report_pdf(
+            doc_kind=doc_kind,
             branch=report.branch,
             revision=report.revision,
             report_date=report.report_date,
@@ -265,7 +363,8 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
         )
 
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
-        resp["Content-Disposition"] = 'attachment; filename="Акт_ВЕК.pdf"'
+        filename = "Звіт_з_перевірки.pdf" if doc_kind == "report" else "Акт_ВЕК.pdf"
+        resp["Content-Disposition"] = f'attachment; filename="{filename}"'
         return resp
 
 
