@@ -423,7 +423,13 @@ function App() {
 
   const onPhotosChange = (e) => {
     const files = Array.from(e.target.files || [])
-    setPhotos(files)
+    if (!files.length) return
+    setPhotos((prev) => [...prev, ...files])
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const openPhotoPicker = () => {
+    fileInputRef.current?.click()
   }
 
   const resetPhotos = () => {
@@ -920,9 +926,14 @@ function App() {
                 </FormControl>
 
                 {photos.length ? (
-                  <Button minH={MIN_TAP_H} variant="outline" onClick={resetPhotos}>
-                    Очистити фото
-                  </Button>
+                  <HStack flexWrap="wrap" spacing={3}>
+                    <Button minH={MIN_TAP_H} type="button" variant="outline" onClick={openPhotoPicker}>
+                      Додати ще фото
+                    </Button>
+                    <Button minH={MIN_TAP_H} variant="outline" onClick={resetPhotos}>
+                      Очистити фото
+                    </Button>
+                  </HStack>
                 ) : null}
               </VStack>
             </CardBody>

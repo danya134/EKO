@@ -33,7 +33,7 @@ FONT_BOLD = "TimesNewRoman-Bold"
 FONT_ITALIC = "TimesNewRoman-Italic"
 FONT_BOLD_ITALIC = "TimesNewRoman-BoldItalic"
 
-HEADER_H = 28 * mm
+HEADER_H = 40 * mm
 TABLE_SIDE_GAP = 2 * mm
 # Під таблицею: поле ПІБ — відступ від правого краю текстового поля (як на бланку).
 SIG_PIB_RIGHT_MARGIN = 10 * mm
@@ -386,7 +386,8 @@ def _draw_page_header(
 
     branch_h = HEADER_H * 0.38
     grid_h = HEADER_H - branch_h
-    row1 = grid_h * 0.52
+    # Нижній ряд — назва дільниці + підпис; більше висоти, ніж верхньому (формула/дати).
+    row1 = grid_h * 0.44
     row2 = grid_h - row1
 
     # Рамка і сітка (суцільна рамка + внутрішні лінії)
