@@ -43,6 +43,21 @@ const FIELD_PROPS = {
 }
 
 const BRANCH_OPTIONS_FALLBACK = ['Філія 1', 'Філія 2', 'Філія 3']
+const NONCONFORMITY_DESCRIPTIONS_FALLBACK = [
+  'Відсутнє маркування тари/контейнерів для відходів',
+  'Не ведеться журнал обліку відходів',
+  'Порушено умови зберігання відходів (відсутнє накриття/піддон)',
+]
+const CORRECTIVE_ACTIONS_FALLBACK = [
+  'Промаркувати тару/контейнери згідно вимог та розмістити таблички',
+  'Відновити ведення журналу обліку та призначити відповідального',
+  'Організувати місце зберігання: накриття, піддон, огородження',
+]
+
+const DOC_KIND = {
+  ACT: 'act',
+  REPORT: 'report',
+}
 
 function isoToday() {
   const d = new Date()
@@ -91,8 +106,11 @@ function SectionHeader({ eyebrow, title, description }) {
 }
 
 function App() {
+  const [docKind, setDocKind] = useState(DOC_KIND.ACT)
   const [branch, setBranch] = useState('')
   const [branchOptions, setBranchOptions] = useState(BRANCH_OPTIONS_FALLBACK)
+  const [nonconformityDescriptionOptions, setNonconformityDescriptionOptions] = useState(NONCONFORMITY_DESCRIPTIONS_FALLBACK)
+  const [correctiveActionOptions, setCorrectiveActionOptions] = useState(CORRECTIVE_ACTIONS_FALLBACK)
   const [revision, setRevision] = useState('0')
   const [reportDate, setReportDate] = useState(isoToday())
 
@@ -108,9 +126,21 @@ function App() {
   const [rows, setRows] = useState([emptyRow(1)])
   const [photos, setPhotos] = useState([])
 
+  const [availableResponsibles, setAvailableResponsibles] = useState([])
+
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const fileInputRef = useRef(null)
+  // Початкові значення посад трактуємо як "автозаповнені" —
+  // тоді при підвантаженні з JSON вони коректно перезаписуються.
+  const lastAutoInspectorRef = useRef({ fullName: '', position: 'Провідний Еколог' })
+  const lastAutoUnitRepRef = useRef({ fullName: '', position: 'Начальник дільниці' })
+  const lastAutoResponsibleRef = useRef('')
+  const lastAutoAdditionalRepsRef = useRef([])
+  // Прапорці першого запуску ефектів — щоб не чистити поля на старті,
+  // а лише при реальній зміні філії/дільниці.
+  const isFirstBranchRunRef = useRef(true)
+  const isFirstSiteNameRunRef = useRef(true)
 
   useEffect(() => {
     let cancelled = false
@@ -122,6 +152,207 @@ function App() {
         if (cancelled) return
         if (Array.isArray(data) && data.every((x) => typeof x === 'string')) {
           setBranchOptions(data)
+        }
+      } catch {
+        // fallback залишається
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const formatResponsibleFromUnitRep = (pos, name) => {
+    const p = (pos || '').trim()
+    const n = (name || '').trim()
+    if (p && n) return `${p} — ${n}`
+    return (p || n || '').trim()
+  }
+
+  const applyAutofillPair = ({ incomingFullName, incomingPosition, setFullName, setPosition, lastRef }) => {
+    const nextFullName = (incomingFullName || '').trim()
+    const nextPosition = (incomingPosition || '').trim()
+    if (!nextFullName && !nextPosition) return
+
+    // Захоплюємо попередньо автозаповнені значення ДО викликів setState,
+    // бо функціональний апдейтер може спрацювати після оновлення lastRef.current.
+    const prevAutoFullName = (lastRef.current.fullName || '').trim()
+    const prevAutoPosition = (lastRef.current.position || '').trim()
+
+    setFullName((prev) => {
+      const prevTrim = (prev || '').trim()
+      if (!prevTrim || prevTrim === prevAutoFullName) return nextFullName || prevTrim
+      return prev
+    })
+    setPosition((prev) => {
+      const prevTrim = (prev || '').trim()
+      if (!prevTrim || prevTrim === prevAutoPosition) return nextPosition || prevTrim
+      return prev
+    })
+
+    lastRef.current = { fullName: nextFullName, position: nextPosition }
+  }
+
+  useEffect(() => {
+    if (!isFirstBranchRunRef.current) {
+      // Очищаємо залежні поля при зміні філії —
+      // далі автозаповнення підвантажить нові значення з JSON.
+      setSiteName('')
+      setInspectorFullName('')
+      setInspectorPosition('')
+      lastAutoInspectorRef.current = { fullName: '', position: '' }
+    }
+    isFirstBranchRunRef.current = false
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        if (!branch.trim()) return
+        const url = new URL(`${API_BASE}/api/inspector-autofill/`)
+        url.searchParams.set('branch', branch)
+        const res = await fetch(url.toString())
+        if (!res.ok) return
+        const data = await res.json()
+        if (cancelled) return
+        applyAutofillPair({
+          incomingFullName: data?.full_name,
+          incomingPosition: data?.position,
+          setFullName: setInspectorFullName,
+          setPosition: setInspectorPosition,
+          lastRef: lastAutoInspectorRef,
+        })
+      } catch {
+        // ignore
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [branch])
+
+  useEffect(() => {
+    if (!isFirstSiteNameRunRef.current) {
+      // Очищаємо залежні поля при зміні дільниці.
+      // Поле "Відповідальний" у рядках чистимо лише якщо там стояло автозаповнене
+      // значення — щоб не затирати ручні правки користувача.
+      setUnitRepFullName('')
+      setUnitRepPosition('')
+      setAdditionalReps([])
+      setAvailableResponsibles([])
+      const prevAuto = (lastAutoResponsibleRef.current || '').trim()
+      if (prevAuto) {
+        setRows((prev) =>
+          prev.map((r) => {
+            const cur = (r.responsible || '').trim()
+            if (cur && cur === prevAuto) return { ...r, responsible: '' }
+            return r
+          })
+        )
+      }
+      lastAutoUnitRepRef.current = { fullName: '', position: '' }
+      lastAutoAdditionalRepsRef.current = []
+      lastAutoResponsibleRef.current = ''
+    }
+    isFirstSiteNameRunRef.current = false
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        if (!branch.trim() || !siteName.trim()) return
+        const url = new URL(`${API_BASE}/api/unit-representative-autofill/`)
+        url.searchParams.set('branch', branch)
+        url.searchParams.set('unit', siteName)
+        const res = await fetch(url.toString())
+        if (!res.ok) return
+        const data = await res.json()
+        if (cancelled) return
+
+        const prevAutoResponsible = lastAutoResponsibleRef.current
+        applyAutofillPair({
+          incomingFullName: data?.full_name,
+          incomingPosition: data?.position,
+          setFullName: setUnitRepFullName,
+          setPosition: setUnitRepPosition,
+          lastRef: lastAutoUnitRepRef,
+        })
+
+        const staffList = Array.isArray(data?.staff) ? data.staff : []
+        const incomingAdditionalReps = staffList
+          .map((s) => ({
+            position: ((s && s.position) || '').trim(),
+            fullName: ((s && s.full_name) || '').trim(),
+          }))
+          .filter((r) => r.position || r.fullName)
+
+        // Список усіх представників для випадайки "Відповідальний" (основний + додаткові).
+        const responsibles = []
+        const mainResp = formatResponsibleFromUnitRep(data?.position, data?.full_name)
+        if (mainResp) responsibles.push(mainResp)
+        for (const r of incomingAdditionalReps) {
+          const f = formatResponsibleFromUnitRep(r.position, r.fullName)
+          if (f && !responsibles.includes(f)) responsibles.push(f)
+        }
+        setAvailableResponsibles(responsibles)
+
+        // Замінюємо попередньо автозаповнених додаткових представників —
+        // тільки якщо користувач їх не редагував вручну.
+        const prevAuto = lastAutoAdditionalRepsRef.current
+        setAdditionalReps((prev) => {
+          const sameAsAuto =
+            prev.length === prevAuto.length &&
+            prev.every((r, i) => {
+              const a = prevAuto[i] || { position: '', fullName: '' }
+              return (
+                (r.position || '').trim() === (a.position || '').trim() &&
+                (r.fullName || '').trim() === (a.fullName || '').trim()
+              )
+            })
+          if (sameAsAuto) {
+            return incomingAdditionalReps.map((r) => ({ ...r }))
+          }
+          return prev
+        })
+        lastAutoAdditionalRepsRef.current = incomingAdditionalReps.map((r) => ({ ...r }))
+
+        const nextAutoResponsible = mainResp
+        if (nextAutoResponsible) {
+          lastAutoResponsibleRef.current = nextAutoResponsible
+          setRows((prev) =>
+            prev.map((r) => {
+              const cur = (r.responsible || '').trim()
+              if (!cur || cur === (prevAutoResponsible || '')) return { ...r, responsible: nextAutoResponsible }
+              return r
+            })
+          )
+        }
+      } catch {
+        // ignore
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [branch, siteName])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [descRes, actRes] = await Promise.all([
+          fetch(`${API_BASE}/api/nonconformity-descriptions/`),
+          fetch(`${API_BASE}/api/corrective-actions/`),
+        ])
+        if (!cancelled && descRes.ok) {
+          const data = await descRes.json()
+          if (Array.isArray(data) && data.every((x) => typeof x === 'string')) {
+            setNonconformityDescriptionOptions(data)
+          }
+        }
+        if (!cancelled && actRes.ok) {
+          const data = await actRes.json()
+          if (Array.isArray(data) && data.every((x) => typeof x === 'string')) {
+            setCorrectiveActionOptions(data)
+          }
         }
       } catch {
         // fallback залишається
@@ -216,6 +447,7 @@ function App() {
     setError('')
     try {
       const fd = new FormData()
+      fd.append('doc_kind', docKind)
       fd.append('branch', branch)
       fd.append('revision', revision)
       fd.append('report_date', reportDate)
@@ -257,7 +489,7 @@ function App() {
       }
 
       const blob = await res.blob()
-      downloadBlob(blob, 'Акт_ВЕК.pdf')
+      downloadBlob(blob, docKind === DOC_KIND.REPORT ? 'Звіт_з_перевірки.pdf' : 'Акт_ВЕК.pdf')
     } catch (e) {
       setError(e?.message || 'Помилка формування PDF')
     } finally {
@@ -275,12 +507,47 @@ function App() {
       <Container maxW="3xl" px={{ base: 3, md: 6 }}>
         <VStack align="stretch" spacing={5}>
           <Box bg="#1f2933" color="white" borderRadius="28px" px={{ base: 5, md: 8 }} py={{ base: 6, md: 8 }}>
-            <Heading size={{ base: 'lg', md: 'xl' }} lineHeight="1.1">
-              Екологічний звіт
-            </Heading>
-            <Text fontSize={{ base: 'sm', md: 'md' }} color="whiteAlpha.800" mt={2} maxW="560px">
-              Строга форма акта перевірки з усіма даними для швидкого формування PDF.
-            </Text>
+            <HStack
+              justify="center"
+              mt={0}
+              spacing={3}
+              bg="whiteAlpha.200"
+              p="6px"
+              borderRadius="full"
+              w="full"
+              flexWrap="wrap"
+            >
+              <Button
+                type="button"
+                minH="56px"
+                px={{ base: 6, md: 10 }}
+                borderRadius="full"
+                variant="ghost"
+                fontSize={{ base: 'md', md: 'lg' }}
+                bg={docKind === DOC_KIND.ACT ? 'white' : 'transparent'}
+                color={docKind === DOC_KIND.ACT ? '#1f2933' : 'white'}
+                _hover={{ bg: docKind === DOC_KIND.ACT ? 'white' : 'whiteAlpha.300' }}
+                _active={{ bg: 'whiteAlpha.400' }}
+                onClick={() => setDocKind(DOC_KIND.ACT)}
+              >
+                Акт проведення перевірки
+              </Button>
+              <Button
+                type="button"
+                minH="56px"
+                px={{ base: 6, md: 10 }}
+                borderRadius="full"
+                variant="ghost"
+                fontSize={{ base: 'md', md: 'lg' }}
+                bg={docKind === DOC_KIND.REPORT ? 'white' : 'transparent'}
+                color={docKind === DOC_KIND.REPORT ? '#1f2933' : 'white'}
+                _hover={{ bg: docKind === DOC_KIND.REPORT ? 'white' : 'whiteAlpha.300' }}
+                _active={{ bg: 'whiteAlpha.400' }}
+                onClick={() => setDocKind(DOC_KIND.REPORT)}
+              >
+                Звіт з перевірки
+              </Button>
+            </HStack>
           </Box>
 
           {error ? (
@@ -522,8 +789,25 @@ function App() {
 
                           <FormControl>
                             <FormLabel>Опис порушення</FormLabel>
+                            <Select
+                              minH={MIN_TAP_H}
+                              placeholder="Обрати зі списку (або введіть вручну нижче)"
+                              value=""
+                              onChange={(e) => {
+                                if (e.target.value) updateRow(idx, { description: e.target.value })
+                              }}
+                              bg="white"
+                              borderColor="blackAlpha.300"
+                            >
+                              {nonconformityDescriptionOptions.map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt}
+                                </option>
+                              ))}
+                            </Select>
                             <Textarea
                               minH="96px"
+                              mt={2}
                               value={r.description}
                               onChange={(e) => updateRow(idx, { description: e.target.value })}
                               {...FIELD_PROPS}
@@ -532,8 +816,25 @@ function App() {
 
                           <FormControl>
                             <FormLabel>Коригуюча дія</FormLabel>
+                            <Select
+                              minH={MIN_TAP_H}
+                              placeholder="Обрати зі списку (або введіть вручну нижче)"
+                              value=""
+                              onChange={(e) => {
+                                if (e.target.value) updateRow(idx, { corrective_actions: e.target.value })
+                              }}
+                              bg="white"
+                              borderColor="blackAlpha.300"
+                            >
+                              {correctiveActionOptions.map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt}
+                                </option>
+                              ))}
+                            </Select>
                             <Textarea
                               minH="80px"
+                              mt={2}
                               value={r.corrective_actions}
                               onChange={(e) => updateRow(idx, { corrective_actions: e.target.value })}
                               {...FIELD_PROPS}
@@ -542,6 +843,25 @@ function App() {
 
                           <FormControl>
                             <FormLabel>Відповідальний</FormLabel>
+                            {availableResponsibles.length > 0 ? (
+                              <Select
+                                minH={MIN_TAP_H}
+                                placeholder="Обрати зі списку (або введіть вручну нижче)"
+                                value=""
+                                onChange={(e) => {
+                                  if (e.target.value) updateRow(idx, { responsible: e.target.value })
+                                }}
+                                bg="white"
+                                borderColor="blackAlpha.300"
+                                mb={2}
+                              >
+                                {availableResponsibles.map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </Select>
+                            ) : null}
                             <Input
                               minH={MIN_TAP_H}
                               value={r.responsible}

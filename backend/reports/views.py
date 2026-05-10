@@ -172,10 +172,33 @@ class UnitRepresentativeAutofillView(APIView):
                     if name == unit:
                         item = u
                         break
+
+        main_position = str(item.get("position") or "").strip()
+        main_full_name = str(item.get("full_name") or "").strip()
+
+        staff_raw = item.get("staff") or []
+        staff: list[dict[str, str]] = []
+        if isinstance(staff_raw, list):
+            for s in staff_raw:
+                if isinstance(s, dict):
+                    pos = str(s.get("position") or "").strip()
+                    fn = str(s.get("full_name") or "").strip()
+                    if pos or fn:
+                        staff.append({"position": pos, "full_name": fn})
+
+        # Якщо у дільниці немає основного представника, але є staff —
+        # перший зі staff стає основним, решта йдуть у додаткових представників.
+        additional = staff
+        if not main_position and not main_full_name and staff:
+            main_position = staff[0]["position"]
+            main_full_name = staff[0]["full_name"]
+            additional = staff[1:]
+
         return Response(
             {
-                "position": str(item.get("position") or "").strip(),
-                "full_name": str(item.get("full_name") or "").strip(),
+                "position": main_position,
+                "full_name": main_full_name,
+                "staff": additional,
             },
             status=status.HTTP_200_OK,
         )
