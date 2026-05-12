@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import io
 import os
 from dataclasses import dataclass
@@ -182,6 +183,8 @@ class NonconformityRow:
     corrective_actions: str
     responsible: str
     due_date: Optional[date]
+    # Лише для PDF «Звіт» (Ф-15-02): стовпчик «%»; у БД може бути порожнім.
+    execution_percent: str = ""
 
 
 @dataclass(frozen=True)
@@ -440,7 +443,7 @@ def _draw_page_header(
     if kind not in {"act", "report"}:
         kind = "act"
     mid_top_text = (
-        "Ф-15-01 Звіт з перевірки виробничої діяльності щодо дотримання вимог природоохоронного законодавства"
+        "Ф-15-02 Звіт з перевірки виконання коригуючих дій з усунення виявлених невідповідностей"
         if kind == "report"
         else "Ф-15-01 Акт перевірки виробничої діяльності щодо дотримання вимог природоохоронного законодавства"
     )
@@ -527,6 +530,77 @@ class _NumberedCanvas(pdfcanvas.Canvas):
         super().save()
 
 
+def _optional_date_cell(d: Optional[date], *, st: ParagraphStyle) -> Paragraph:
+    """Порожня комірка без прочерку, якщо дату не задано."""
+    if d:
+        return _p(f"<b>{d:%d.%m.%Y}</b>", st)
+    return Paragraph("", st)
+
+
+def _vek_act_basis_paragraph(act_date: date, *, base: ParagraphStyle) -> Paragraph:
+    """Дата у тексті підстав — дата складання акта ВЕК (не обов’язково та сама, що дата звіту)."""
+    text = (
+        "Акт перевірки виробничої діяльності з дотримання природоохоронного законодавства "
+        f"від {act_date:%d.%m.%Y} – виробничий екологічний контроль (ВЕК)"
+    )
+    return _p(text, base)
+
+
+def _uk_num_word_feminine(n: int) -> str:
+    """Числівник для форми «N (слова) невідповідностей» (жіночий рід, 1–20)."""
+    words = {
+        1: "одна",
+        2: "дві",
+        3: "три",
+        4: "чотири",
+        5: "п'ять",
+        6: "шість",
+        7: "сім",
+        8: "вісім",
+        9: "дев'ять",
+        10: "десять",
+        11: "одинадцять",
+        12: "дванадцять",
+        13: "тринадцять",
+        14: "чотирнадцять",
+        15: "п'ятнадцять",
+        16: "шістнадцять",
+        17: "сімнадцять",
+        18: "вісімнадцять",
+        19: "дев'ятнадцять",
+        20: "двадцять",
+    }
+    if n in words:
+        return words[n]
+    return str(n)
+
+
+def _closure_conclusion_text(rows: list[tuple[str, str]], rd: date) -> str:
+    """Текст «Кінцеве заключення» за рядками (коригуюча дія, yes|no)."""
+    relevant: list[tuple[str, str]] = []
+    for t, d in rows:
+        ts = (t or "").strip()
+        ds = (d or "").strip().lower()
+        if not ts or ds not in ("yes", "no"):
+            continue
+        relevant.append((ts, ds))
+    if not relevant:
+        return ""
+    total = len(relevant)
+    yes_n = sum(1 for _, d in relevant if d == "yes")
+    no_n = total - yes_n
+    ds_fmt = f"{rd:%d.%m.%Y}"
+    if no_n == 0:
+        return f"Кінцеве заключення: усі невідповідності від {ds_fmt} закриті."
+    if yes_n == 0:
+        return f"Кінцеве заключення: невідповідності від {ds_fmt} не закриті."
+    w = _uk_num_word_feminine(yes_n)
+    return (
+        f"Кінцеве заключення: {yes_n} ({w}) невідповідностей від {ds_fmt} закриті; "
+        f"{no_n} залишаються відкритими."
+    )
+
+
 def build_environmental_report_pdf(
     *,
     doc_kind: str = "act",
@@ -542,12 +616,24 @@ def build_environmental_report_pdf(
     nonconformities: Iterable[NonconformityRow],
     photo_items: Iterable[PhotoItem],
     additional_unit_representatives: Iterable[tuple[str, str]] | None = None,
+    act_date: Optional[date] = None,
+    analysis_proposed_vek: Optional[date] = None,
+    analysis_proposed_check: Optional[date] = None,
+    analysis_actual: Optional[date] = None,
+    analysis_reason_text: str = "",
+    analysis_violation: str = "",
+    analysis_corrective_action: str = "",
+    closure_rows: Iterable[tuple[str, str]] | None = None,
+    closure_comments: str = "",
 ) -> bytes:
     ensure_cyrillic_font_registered()
 
     kind = (doc_kind or "act").strip().lower()
     if kind not in {"act", "report"}:
         kind = "act"
+
+    # У тексті акту ВЕК у підставах — дата складання акта; якщо не передано — як раніше (дата звіту).
+    basis_date = act_date if act_date is not None else report_date
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -646,170 +732,538 @@ def build_environmental_report_pdf(
 
     story = []
 
-    # Блок під колонтитулом (макет як у Word-зразку)
-    story.append(_p("<b><i>Звіт</i></b>" if kind == "report" else "<b><i>Акт</i></b>", title_1))
-    story.append(_p("<i><u>з перевірки виробничої діяльності</u></i>" if kind == "report" else "<i><u>перевірки виробничої діяльності</u></i>", title_2))
-    story.append(_p("<i><u>щодо дотримання вимог природоохоронного законодавства</u></i>", title_2))
-    story.append(Spacer(1, 10))
-
-    form_norm = (inspection_form or "").strip().lower()
-    form_acc = "позапланову" if form_norm != "планова" else "планову"
-
     inspector_position = (inspector_position or "").strip() or "Провідний Еколог"
     unit_rep_position = (unit_representative_position or "").strip() or "Начальник дільниці"
 
-    # Пара "ПІБ + Посада" в одному рядку — підкреслення по довжині тексту (як знизу під таблицею).
-    def _pib_posada_row(*, pib: str, posada: str) -> Table:
-        return _two_signature_lines_row(
-            layout_width=doc.width,
-            left_value=pib,
-            right_value=posada,
-            left_caption="(ПІБ)",
-            right_caption="(Посада)",
-            value_style=value_b,
-            caption_style=caption_sm,
-            fixed_gap_between_fields=True,
-            min_width=60 * mm,
+    if kind == "report":
+        # Ф-15-02 — одна суцільна таблиця без проміжків між блоками (межі спільні).
+        story.append(_p("<b><i>Звіт</i></b>", title_1))
+        _site_html = html.escape((site_name or "").strip() or "—", quote=False)
+        story.append(
+            _p(
+                "<i><u>"
+                f"перевірки виробничої діяльності ({_site_html}) "
+                "з дотримання природоохоронного законодавства – виробничий екологічний контроль"
+                "</u></i>",
+                title_2,
+            )
         )
-
-    # Лівий блок: підписи в рядок, відступ зліва як у лейблів
-    left_pad = 3 * mm
-    left_block = Table(
-        [
-            [_p(f"<b>Дата:</b> <b>{report_date:%d.%m.%Y}</b>", label_b)],
-            [_p(f"<b>Перевірку провели:</b> <b><i><u>{form_acc}</u></i></b>", label_b)],
-            [_pib_posada_row(pib=inspector_full_name, posada=inspector_position)],
-            [Spacer(1, 8)],
-            [_p("<b>Представник підрозділу:</b>", label_b)],
-            [_pib_posada_row(pib=unit_representative_full_name, posada=unit_rep_position)],
-        ],
-        colWidths=["*"],
-    )
-    left_block.setStyle(
-        TableStyle(
-            [
-                ("LEFTPADDING", (0, 0), (-1, -1), left_pad),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                ("TOPPADDING", (0, 0), (-1, -1), 0),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-            ]
-        )
-    )
-
-    top_table = Table([[left_block]], colWidths=[doc.width])
-    top_table.setStyle(
-        TableStyle(
-            [
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                ("TOPPADDING", (0, 0), (-1, -1), 0),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-            ]
-        )
-    )
-
-    story.append(top_table)
-    story.append(Spacer(1, 10))
-    story.append(Paragraph("Таблиця невідповідностей", h2))
-
-    rows = list(nonconformities)
-    table_data = [
-        [
-            _p("<b>№ п/п</b>", table_header),
-            _p("<b>Виявлена невідповідність</b>", table_header),
-            _p("<b>Коригуючі дії</b>", table_header),
-            _p("<b>Відповідальний виконавець</b>", table_header),
-            _p("<b>Строк виконання</b>", table_header),
-        ]
-    ]
-
-    for r in rows:
-        dd = r.due_date.strftime("%d.%m.%Y") if r.due_date else ""
-        table_data.append(
-            [
-                _p(str(r.order_number), base),
-                _p(r.description, base),
-                _p(r.corrective_actions, base),
-                _p(r.responsible, base),
-                _p(dd, base),
-            ]
-        )
-
-    # Робимо зовнішній зазор між таблицею і рамкою сторінки.
-    table_w = max(1.0, doc.width - 2 * TABLE_SIDE_GAP)
-    w0 = min(12 * mm, table_w * 0.10)
-    rem = max(1.0, table_w - w0)
-    col_widths = [w0, rem * 0.38, rem * 0.27, rem * 0.20, rem * 0.15]
-    tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
-    tbl.hAlign = "CENTER"
-    tbl.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
-                ("FONTSIZE", (0, 0), (-1, -1), 12),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("ALIGN", (0, 0), (-1, 0), "CENTER"),
-                ("ALIGN", (0, 1), (0, -1), "CENTER"),
-                ("GRID", (0, 0), (-1, -1), 0.6, colors.black),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
-                ("LEFTPADDING", (0, 0), (-1, -1), 3),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-                ("TOPPADDING", (0, 0), (-1, -1), 1),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
-            ]
-        )
-    )
-
-    story.append(tbl)
-
-    # Підписи під таблицею (бланк)
-    story.append(Spacer(1, 12))
-    story.append(_p("Підписи:", label_b))
-    story.append(Spacer(1, 6))
-
-    story.append(_p("Перевіряючий (посада)", sig_label))
-    story.append(
-        _two_signature_lines_row(
-            layout_width=doc.width,
-            left_value=inspector_position or "",
-            right_value=inspector_full_name or "",
-            left_caption="(Посада)",
-            right_caption="(ПІБ)",
-            value_style=value_b,
-            caption_style=caption_sm,
-            cell_pad_right=SIG_PIB_RIGHT_MARGIN,
-        )
-    )
-    story.append(Spacer(1, 10))
-
-    story.append(_p("Представник підрозділу (посада)", sig_label))
-    story.append(
-        _two_signature_lines_row(
-            layout_width=doc.width,
-            left_value=unit_representative_position or "",
-            right_value=unit_representative_full_name or "",
-            left_caption="(Посада)",
-            right_caption="(ПІБ)",
-            value_style=value_b,
-            caption_style=caption_sm,
-            cell_pad_right=SIG_PIB_RIGHT_MARGIN,
-        )
-    )
-
-    extras = list(additional_unit_representatives or [])
-    for pos, full_name in extras:
-        pos_s = (pos or "").strip()
-        name_s = (full_name or "").strip()
-        if not pos_s and not name_s:
-            continue
         story.append(Spacer(1, 10))
+
+        banner_style = ParagraphStyle(
+            "BannerF15",
+            parent=small,
+            alignment=1,
+            fontName=FONT_BOLD,
+        )
+        cell_center = ParagraphStyle(
+            "F15StagePctCenter",
+            parent=base,
+            alignment=1,
+            leading=14.5,
+        )
+
+        W = doc.width
+        six = [W / 6] * 6
+
+        rows_nc = list(nonconformities)
+
+        grid_data: list[list] = []
+
+        # рядок 0–1: підстави / назва / дата
+        grid_data.append(
+            [
+                _p("<b>Підстави для звіту (акт ВЕК)</b>", table_header),
+                "",
+                "",
+                _p("<b>Назва підрозділу</b>", table_header),
+                "",
+                _p("<b>Дата звіту</b>", table_header),
+            ]
+        )
+        grid_data.append(
+            [
+                _vek_act_basis_paragraph(basis_date, base=base),
+                "",
+                "",
+                _p((site_name or "").strip(), cell_center),
+                "",
+                _p(f"<b>{report_date:%d.%m.%Y}</b>", cell_center),
+            ]
+        )
+
+        # рядок 2–3: перевіряючий | представник (по 3 колонки = 50/50)
+        grid_data.append(
+            [
+                _p("<b>Посада та ПІБ перевіряючого</b>", table_header),
+                "",
+                "",
+                _p("<b>Представник підрозділу (посада та ПІБ)</b>", table_header),
+                "",
+                "",
+            ]
+        )
+        grid_data.append(
+            [
+                _p(f"{inspector_position} {inspector_full_name}".strip(), cell_center),
+                "",
+                "",
+                _p(f"{unit_rep_position} {unit_representative_full_name}".strip(), cell_center),
+                "",
+                "",
+            ]
+        )
+
+        # рядок 4: банер
+        grid_data.append(
+            [
+                _p("<b>СПОСТЕРЕЖУВАНА НЕВІДПОВІДНІСТЬ</b>", banner_style),
+                "",
+                "",
+                "",
+                "",
+                "",
+            ]
+        )
+
+        # рядок 5: праворуч один підпис «Стадія виконання %» на всю ширину двох колонок даних
+        grid_data.append(
+            [
+                _p("<b>Виявлена при ВЕК (дата)</b>", table_header),
+                "",
+                "",
+                "",
+                _p("<b>Стадія виконання %</b>", table_header),
+                "",
+            ]
+        )
+
+        # рядки даних
+        if not rows_nc:
+            grid_data.append(
+                [
+                    _p("—", base),
+                    "",
+                    "",
+                    "",
+                    _p("—", cell_center),
+                    _p("—", cell_center),
+                ]
+            )
+        else:
+            for r in rows_nc:
+                pct = (r.execution_percent or "").strip()
+                if not pct:
+                    pct = "100"
+                stage = (r.corrective_actions or "").strip() or "—"
+                desc = (r.description or "").strip() or "—"
+                grid_data.append(
+                    [
+                        _p(desc, base),
+                        "",
+                        "",
+                        "",
+                        _p(stage, cell_center),
+                        _p(pct, cell_center),
+                    ]
+                )
+
+        main_tbl = Table(grid_data, colWidths=six, repeatRows=6)
+        main_tbl.hAlign = "CENTER"
+        last_row = len(grid_data) - 1
+        ts = [
+            ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
+            ("FONTSIZE", (0, 0), (-1, -1), 12),
+            ("GRID", (0, 0), (-1, -1), 0.6, colors.black),
+            ("SPAN", (0, 0), (2, 0)),
+            ("SPAN", (3, 0), (4, 0)),
+            ("SPAN", (0, 1), (2, 1)),
+            ("SPAN", (3, 1), (4, 1)),
+            ("SPAN", (0, 2), (2, 2)),
+            ("SPAN", (3, 2), (5, 2)),
+            ("SPAN", (0, 3), (2, 3)),
+            ("SPAN", (3, 3), (5, 3)),
+            ("SPAN", (0, 4), (5, 4)),
+            ("BACKGROUND", (0, 4), (5, 4), colors.whitesmoke),
+            ("SPAN", (0, 5), (3, 5)),
+            ("SPAN", (4, 5), (5, 5)),
+            ("BACKGROUND", (0, 5), (-1, 5), colors.whitesmoke),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ALIGN", (0, 0), (-1, 3), "CENTER"),
+            ("ALIGN", (0, 4), (5, 4), "CENTER"),
+            ("ALIGN", (0, 5), (-1, 5), "CENTER"),
+            ("ALIGN", (0, 1), (2, 1), "LEFT"),
+            ("ALIGN", (3, 1), (4, 1), "CENTER"),
+            ("ALIGN", (5, 1), (5, 1), "CENTER"),
+            ("ALIGN", (0, 2), (2, 2), "CENTER"),
+            ("ALIGN", (3, 2), (5, 2), "CENTER"),
+            ("ALIGN", (0, 3), (2, 3), "CENTER"),
+            ("ALIGN", (3, 3), (5, 3), "CENTER"),
+            ("ALIGN", (0, 6), (3, last_row), "LEFT"),
+            ("ALIGN", (4, 6), (5, last_row), "CENTER"),
+            ("TOPPADDING", (0, 4), (5, 4), 6),
+            ("BOTTOMPADDING", (0, 4), (5, 4), 6),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]
+        for ri in range(6, len(grid_data)):
+            ts.append(("SPAN", (0, ri), (3, ri)))
+
+        main_tbl.setStyle(TableStyle(ts))
+
+        story.append(main_tbl)
+
+        # «Аналіз причин невідповідностей і коригуючі дії» — після блоку невідповідностей
+        story.append(Spacer(1, 14))
+        analysis_title_st = ParagraphStyle(
+            "ReportAnalysisTitle",
+            parent=base,
+            fontName=FONT_BOLD,
+            fontSize=12,
+            leading=14.5,
+            alignment=1,
+            spaceAfter=4,
+        )
+        story.append(
+            _p("<b>АНАЛІЗ ПРИЧИН НЕВІДПОВІДНОСТЕЙ І КОРИГУЮЧІ ДІЇ</b>", analysis_title_st)
+        )
+        story.append(_p("<i>(заповнюється представниками підрозділу)</i>", title_2))
+        story.append(Spacer(1, 6))
+
+        ad_w = doc.width
+        acw = [ad_w * 0.25, ad_w * 0.25, ad_w * 0.25, ad_w * 0.25]
+        _rep_line = f"{unit_rep_position} {unit_representative_full_name}".strip()
+        rep_cell = (
+            _p(f"<b>{html.escape(_rep_line, quote=False)}</b>", cell_center)
+            if _rep_line
+            else Paragraph("", cell_center)
+        )
+
+        an_data = [
+            [
+                _p("<b>Запропонована дата виконання</b>", table_header),
+                "",
+                _p(
+                    "<b>Реальна дата виконання (заповнюється при повному обсязі виконання)</b>",
+                    table_header,
+                ),
+                _p("<b>Представник підрозділу</b>", table_header),
+            ],
+            [
+                _p("<b>Під час проведення ВЕК</b>", table_header),
+                _p("<b>При перевірці виконання</b>", table_header),
+                "",
+                "",
+            ],
+            [
+                _optional_date_cell(analysis_proposed_vek, st=cell_center),
+                _optional_date_cell(analysis_proposed_check, st=cell_center),
+                _optional_date_cell(analysis_actual, st=cell_center),
+                rep_cell,
+            ],
+        ]
+        an_tbl = Table(an_data, colWidths=acw)
+        an_tbl.hAlign = "CENTER"
+        an_ts = [
+            ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
+            ("FONTSIZE", (0, 0), (-1, -1), 12),
+            ("GRID", (0, 0), (-1, -1), 0.6, colors.black),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("SPAN", (0, 0), (1, 0)),
+            ("SPAN", (2, 0), (2, 1)),
+            ("SPAN", (3, 0), (3, 1)),
+            # Як у заголовку таблиці «Причина невиконання…»
+            ("BACKGROUND", (0, 0), (-1, 1), colors.whitesmoke),
+            ("ALIGN", (0, 0), (-1, 2), "CENTER"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]
+        an_tbl.setStyle(TableStyle(an_ts))
+        story.append(an_tbl)
+
+        # Таблиця «Причина…»: 3 колонки — порушення | причина | коригуюча дія
+        story.append(Spacer(1, 8))
+
+        def _cause_cell_paragraph(text: str) -> Paragraph:
+            s = (text or "").strip()
+            return _p(html.escape(s, quote=False), base) if s else Paragraph("", base)
+
+        _viol_txt = (analysis_violation or "").strip()
+        if not _viol_txt:
+            _nc_list = list(nonconformities)
+            if _nc_list:
+                _viol_txt = (_nc_list[0].description or "").strip()
+
+        cause_w = doc.width
+        cw3 = [cause_w / 3.0, cause_w / 3.0, cause_w / 3.0]
+        cause_data = [
+            [
+                _p("<b>Причина невиконання і передбачувана коригуюча дія</b>", table_header),
+                "",
+                "",
+            ],
+            [
+                _cause_cell_paragraph(_viol_txt),
+                _cause_cell_paragraph(analysis_reason_text),
+                _cause_cell_paragraph(analysis_corrective_action),
+            ],
+        ]
+        cause_tbl = Table(cause_data, colWidths=cw3)
+        cause_tbl.hAlign = "CENTER"
+        cause_ts = [
+            ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
+            ("FONTSIZE", (0, 0), (-1, -1), 12),
+            ("GRID", (0, 0), (-1, -1), 0.6, colors.black),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("SPAN", (0, 0), (2, 0)),
+            ("BACKGROUND", (0, 0), (2, 0), colors.whitesmoke),
+            ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+            ("ALIGN", (0, 1), (-1, 1), "LEFT"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]
+        cause_tbl.setStyle(TableStyle(cause_ts))
+        story.append(cause_tbl)
+
+        # Звіт про закриття невідповідностей (для звіту замість фотофіксації)
+        cl_rows_norm: list[tuple[str, str]] = []
+        if closure_rows:
+            for t_raw, d_raw in closure_rows:
+                t = str(t_raw or "").strip()
+                d = str(d_raw or "").strip().lower()
+                if d not in ("yes", "no"):
+                    d = ""
+                if t or d:
+                    cl_rows_norm.append((t, d))
+        rows_for_pdf = cl_rows_norm if cl_rows_norm else [("", "")]
+
+        story.append(Spacer(1, 14))
+        story.append(_p("<b>ЗВІТ ПРО ЗАКРИТТЯ НЕВІДПОВІДНОСТЕЙ</b>", analysis_title_st))
+        story.append(_p("<i>(заповнюється перевіряючим)</i>", title_2))
+        story.append(Spacer(1, 6))
+
+        cl_w = doc.width
+        cl_cw = [cl_w * 0.70, cl_w * 0.15, cl_w * 0.15]
+        mark_st = ParagraphStyle(
+            "ClosureMark",
+            parent=base,
+            alignment=1,
+            fontName=FONT_NAME,
+            fontSize=12,
+            leading=14.5,
+        )
+        cl_table_data: list[list] = [
+            [
+                _p("<b>Коригуючу дію виконано</b>", table_header),
+                _p("<b>Так</b>", table_header),
+                _p("<b>Ні</b>", table_header),
+            ]
+        ]
+        for i, (text, done) in enumerate(rows_for_pdf, start=1):
+            t = (text or "").strip()
+            esc = html.escape(t, quote=False) if t else ""
+            left_cell = _p(f"{i}. {esc}", base) if t else _p(f"{i}.", base)
+            yes_cell = _p("V", mark_st) if done == "yes" else Paragraph("", mark_st)
+            no_cell = _p("V", mark_st) if done == "no" else Paragraph("", mark_st)
+            cl_table_data.append([left_cell, yes_cell, no_cell])
+
+        cl_tbl = Table(cl_table_data, colWidths=cl_cw)
+        cl_tbl.hAlign = "CENTER"
+        cl_ts = [
+            ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
+            ("FONTSIZE", (0, 0), (-1, -1), 12),
+            ("GRID", (0, 0), (-1, -1), 0.6, colors.black),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]
+        cl_tbl.setStyle(TableStyle(cl_ts))
+        story.append(cl_tbl)
+
+        conc = _closure_conclusion_text(cl_rows_norm, report_date)
+        if conc:
+            story.append(Spacer(1, 10))
+            story.append(_p(conc, base))
+
+        cc_s = (closure_comments or "").strip()
+        if cc_s:
+            story.append(Spacer(1, 10))
+            story.append(_p("<b>Коментарі:</b>", label_b))
+            story.append(_p(html.escape(cc_s, quote=False), base))
+
+        story.append(Spacer(1, 12))
+        story.append(_p("<b>Перевіряючий</b>", label_b))
+        _insp_line = " — ".join(
+            x for x in (inspector_position or "", inspector_full_name or "") if (x or "").strip()
+        )
+        if _insp_line:
+            story.append(_p(html.escape(_insp_line, quote=False), base))
+
+        extras_rep = list(additional_unit_representatives or [])
+        if extras_rep:
+            story.append(Spacer(1, 14))
+            story.append(_p("<b>Додаткові представники підрозділу:</b>", label_b))
+            for pos, full_name in extras_rep:
+                pos_s = (pos or "").strip()
+                name_s = (full_name or "").strip()
+                if not pos_s and not name_s:
+                    continue
+                line = f"{pos_s} {name_s}".strip()
+                if line:
+                    story.append(_p(line, base))
+
+    else:
+        # Акт (Ф-15-01) — попередній макет
+        story.append(_p("<b><i>Акт</i></b>", title_1))
+        story.append(_p("<i><u>перевірки виробничої діяльності</u></i>", title_2))
+        story.append(_p("<i><u>щодо дотримання вимог природоохоронного законодавства</u></i>", title_2))
+        story.append(Spacer(1, 10))
+
+        form_norm = (inspection_form or "").strip().lower()
+        form_acc = "позапланову" if form_norm != "планова" else "планову"
+
+        # Пара "ПІБ + Посада" в одному рядку — підкреслення по довжині тексту (як знизу під таблицею).
+        def _pib_posada_row(*, pib: str, posada: str) -> Table:
+            return _two_signature_lines_row(
+                layout_width=doc.width,
+                left_value=pib,
+                right_value=posada,
+                left_caption="(ПІБ)",
+                right_caption="(Посада)",
+                value_style=value_b,
+                caption_style=caption_sm,
+                fixed_gap_between_fields=True,
+                min_width=60 * mm,
+            )
+
+        # Лівий блок: підписи в рядок, відступ зліва як у лейблів
+        left_pad = 3 * mm
+        left_block = Table(
+            [
+                [_p(f"<b>Дата:</b> <b>{report_date:%d.%m.%Y}</b>", label_b)],
+                [_p(f"<b>Перевірку провели:</b> <b><i><u>{form_acc}</u></i></b>", label_b)],
+                [_pib_posada_row(pib=inspector_full_name, posada=inspector_position)],
+                [Spacer(1, 8)],
+                [_p("<b>Представник підрозділу:</b>", label_b)],
+                [_pib_posada_row(pib=unit_representative_full_name, posada=unit_rep_position)],
+            ],
+            colWidths=["*"],
+        )
+        left_block.setStyle(
+            TableStyle(
+                [
+                    ("LEFTPADDING", (0, 0), (-1, -1), left_pad),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ]
+            )
+        )
+
+        top_table = Table([[left_block]], colWidths=[doc.width])
+        top_table.setStyle(
+            TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ]
+            )
+        )
+
+        story.append(top_table)
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Таблиця невідповідностей", h2))
+
+        rows = list(nonconformities)
+        table_data = [
+            [
+                _p("<b>№ п/п</b>", table_header),
+                _p("<b>Виявлена невідповідність</b>", table_header),
+                _p("<b>Коригуючі дії</b>", table_header),
+                _p("<b>Відповідальний виконавець</b>", table_header),
+                _p("<b>Строк виконання</b>", table_header),
+            ]
+        ]
+
+        for r in rows:
+            dd = r.due_date.strftime("%d.%m.%Y") if r.due_date else ""
+            table_data.append(
+                [
+                    _p(str(r.order_number), base),
+                    _p(r.description, base),
+                    _p(r.corrective_actions, base),
+                    _p(r.responsible, base),
+                    _p(dd, base),
+                ]
+            )
+
+        # Робимо зовнішній зазор між таблицею і рамкою сторінки.
+        table_w = max(1.0, doc.width - 2 * TABLE_SIDE_GAP)
+        w0 = min(12 * mm, table_w * 0.10)
+        rem = max(1.0, table_w - w0)
+        col_widths = [w0, rem * 0.38, rem * 0.27, rem * 0.20, rem * 0.15]
+        tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
+        tbl.hAlign = "CENTER"
+        tbl.setStyle(
+            TableStyle(
+                [
+                    ("FONTNAME", (0, 0), (-1, -1), FONT_NAME),
+                    ("FONTSIZE", (0, 0), (-1, -1), 12),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+                    ("ALIGN", (0, 1), (0, -1), "CENTER"),
+                    ("GRID", (0, 0), (-1, -1), 0.6, colors.black),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                    ("TOPPADDING", (0, 0), (-1, -1), 1),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+                ]
+            )
+        )
+
+        story.append(tbl)
+
+        # Підписи під таблицею (бланк)
+        story.append(Spacer(1, 12))
+        story.append(_p("Підписи:", label_b))
+        story.append(Spacer(1, 6))
+
+        story.append(_p("Перевіряючий (посада)", sig_label))
+        story.append(
+            _two_signature_lines_row(
+                layout_width=doc.width,
+                left_value=inspector_position or "",
+                right_value=inspector_full_name or "",
+                left_caption="(Посада)",
+                right_caption="(ПІБ)",
+                value_style=value_b,
+                caption_style=caption_sm,
+                cell_pad_right=SIG_PIB_RIGHT_MARGIN,
+            )
+        )
+        story.append(Spacer(1, 10))
+
         story.append(_p("Представник підрозділу (посада)", sig_label))
         story.append(
             _two_signature_lines_row(
                 layout_width=doc.width,
-                left_value=pos_s,
-                right_value=name_s,
+                left_value=unit_representative_position or "",
+                right_value=unit_representative_full_name or "",
                 left_caption="(Посада)",
                 right_caption="(ПІБ)",
                 value_style=value_b,
@@ -818,8 +1272,29 @@ def build_environmental_report_pdf(
             )
         )
 
+        extras = list(additional_unit_representatives or [])
+        for pos, full_name in extras:
+            pos_s = (pos or "").strip()
+            name_s = (full_name or "").strip()
+            if not pos_s and not name_s:
+                continue
+            story.append(Spacer(1, 10))
+            story.append(_p("Представник підрозділу (посада)", sig_label))
+            story.append(
+                _two_signature_lines_row(
+                    layout_width=doc.width,
+                    left_value=pos_s,
+                    right_value=name_s,
+                    left_caption="(Посада)",
+                    right_caption="(ПІБ)",
+                    value_style=value_b,
+                    caption_style=caption_sm,
+                    cell_pad_right=SIG_PIB_RIGHT_MARGIN,
+                )
+            )
+
     photos = list(photo_items)
-    if photos:
+    if photos and kind != "report":
         story.append(PageBreak())
         max_w = doc.width
         # Залишаємо місце під Spacer і невеликий буфер, щоб велике фото не виштовхувало блок на нову сторінку.

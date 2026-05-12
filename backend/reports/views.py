@@ -227,6 +227,7 @@ class EnvironmentalReportPdfView(APIView):
                 corrective_actions=r.corrective_actions,
                 responsible=r.responsible,
                 due_date=r.due_date,
+                execution_percent="",
             )
             for r in report.nonconformities.all()
         ]
@@ -262,6 +263,7 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
 
     Очікує поля:
     - branch, revision, report_date (YYYY-MM-DD)
+    - act_date (YYYY-MM-DD), необов’язково: дата складання акта для тексту підстав ВЕК; якщо порожньо — дорівнює report_date
     - site_name, inspector_full_name, unit_representative_full_name
     - nonconformities_json: JSON array [{order_number, description, corrective_actions, responsible, due_date}]
     - photos: кілька файлів (однакове поле photos)
@@ -303,6 +305,52 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
         except ValueError as e:
             raise ValidationError({"report_date": "Очікується формат YYYY-MM-DD"}) from e
 
+        act_date_raw = (data.get("act_date") or "").strip()
+        if act_date_raw:
+            try:
+                act_date = date.fromisoformat(act_date_raw)
+            except ValueError as e:
+                raise ValidationError({"act_date": "Очікується формат YYYY-MM-DD"}) from e
+        else:
+            act_date = report_date
+
+        def _optional_iso_date(key: str):
+            raw = (data.get(key) or "").strip()
+            if not raw:
+                return None
+            try:
+                return date.fromisoformat(raw)
+            except ValueError as e:
+                raise ValidationError({key: "Очікується формат YYYY-MM-DD"}) from e
+
+        analysis_proposed_vek = _optional_iso_date("analysis_proposed_vek")
+        analysis_proposed_check = _optional_iso_date("analysis_proposed_check")
+        analysis_actual = _optional_iso_date("analysis_actual")
+        analysis_reason_text = (data.get("analysis_reason_text") or "").strip()
+        analysis_violation = (data.get("analysis_violation") or "").strip()
+        analysis_corrective_action = (data.get("analysis_corrective_action") or "").strip()
+
+        closure_comments = (data.get("closure_comments") or "").strip()
+        closure_raw = (data.get("closure_rows_json") or "[]").strip()
+        closure_rows_parsed: list[tuple[str, str]] = []
+        try:
+            closure_list = json.loads(closure_raw) if closure_raw else []
+        except json.JSONDecodeError as e:
+            raise ValidationError(
+                {"closure_rows_json": "Некоректний JSON (очікується масив)"}
+            ) from e
+        if not isinstance(closure_list, list):
+            raise ValidationError({"closure_rows_json": "Очікується JSON-масив"})
+        for item in closure_list:
+            if not isinstance(item, dict):
+                continue
+            ca = str(item.get("corrective_action") or "").strip()
+            done = str(item.get("completed") or "").strip().lower()
+            if done not in ("yes", "no"):
+                done = ""
+            if ca or done:
+                closure_rows_parsed.append((ca, done))
+
         nonconf_raw = (data.get("nonconformities_json") or "[]").strip()
         try:
             nonconf_list = json.loads(nonconf_raw) if nonconf_raw else []
@@ -327,6 +375,7 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
             additional_unit_representatives=additional_reps,
         )
 
+        nonconf_rows: list[NonconformityRow] = []
         for idx, row in enumerate(nonconf_list, start=1):
             if not isinstance(row, dict):
                 continue
@@ -338,6 +387,8 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
                 except ValueError:
                     due_date = None
 
+            execution_percent = str(row.get("execution_percent") or "").strip()
+
             EnvironmentalNonconformity.objects.create(
                 report=report,
                 order_number=int(row.get("order_number") or idx),
@@ -347,25 +398,26 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
                 due_date=due_date,
             )
 
-        files = request.FILES.getlist("photos")
-        for i, f in enumerate(files, start=1):
-            EnvironmentalPhoto.objects.create(
-                report=report,
-                caption=getattr(f, "name", "") or f"Фото {i}",
-                order_number=i,
-                image=f,
+            nonconf_rows.append(
+                NonconformityRow(
+                    order_number=int(row.get("order_number") or idx),
+                    description=str(row.get("description") or "").strip(),
+                    corrective_actions=str(row.get("corrective_actions") or "").strip(),
+                    responsible=str(row.get("responsible") or "").strip(),
+                    due_date=due_date,
+                    execution_percent=execution_percent,
+                )
             )
 
-        nonconf_rows = [
-            NonconformityRow(
-                order_number=r.order_number,
-                description=r.description,
-                corrective_actions=r.corrective_actions,
-                responsible=r.responsible,
-                due_date=r.due_date,
-            )
-            for r in report.nonconformities.all()
-        ]
+        files = request.FILES.getlist("photos")
+        if doc_kind != "report":
+            for i, f in enumerate(files, start=1):
+                EnvironmentalPhoto.objects.create(
+                    report=report,
+                    caption=getattr(f, "name", "") or f"Фото {i}",
+                    order_number=i,
+                    image=f,
+                )
 
         photo_items = [PhotoItem(caption=p.caption, image_path=p.image.path) for p in report.photos.all()]
 
@@ -383,10 +435,19 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
             nonconformities=nonconf_rows,
             photo_items=photo_items,
             additional_unit_representatives=_additional_reps_for_pdf(report),
+            act_date=act_date,
+            analysis_proposed_vek=analysis_proposed_vek,
+            analysis_proposed_check=analysis_proposed_check,
+            analysis_actual=analysis_actual,
+            analysis_reason_text=analysis_reason_text,
+            analysis_violation=analysis_violation,
+            analysis_corrective_action=analysis_corrective_action,
+            closure_rows=closure_rows_parsed,
+            closure_comments=closure_comments,
         )
 
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
-        filename = "Звіт_з_перевірки.pdf" if doc_kind == "report" else "Акт_ВЕК.pdf"
+        filename = "Звіт_Ф-15-02.pdf" if doc_kind == "report" else "Акт_ВЕК.pdf"
         resp["Content-Disposition"] = f'attachment; filename="{filename}"'
         return resp
 

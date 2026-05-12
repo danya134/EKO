@@ -17,6 +17,8 @@ import {
   Input,
   InputGroup,
   InputLeftElement,
+  Radio,
+  RadioGroup,
   Select,
   Text,
   Textarea,
@@ -59,6 +61,9 @@ const DOC_KIND = {
   REPORT: 'report',
 }
 
+/** Лише для звіту Ф-15-02 — зберігається в corrective_actions */
+const REPORT_STAGE_OPTIONS = ['виконано', 'не виконано', 'виконано неповністю']
+
 function isoToday() {
   const d = new Date()
   const pad = (n) => String(n).padStart(2, '0')
@@ -72,11 +77,16 @@ function emptyRow(orderNumber) {
     corrective_actions: '',
     responsible: '',
     due_date: '',
+    execution_percent: '100',
   }
 }
 
 function emptyAdditionalRep() {
   return { position: '', fullName: '' }
+}
+
+function emptyClosureRow() {
+  return { corrective_action: '', completed: '' }
 }
 
 function SectionHeader({ eyebrow, title, description }) {
@@ -113,6 +123,14 @@ function App() {
   const [correctiveActionOptions, setCorrectiveActionOptions] = useState(CORRECTIVE_ACTIONS_FALLBACK)
   const [revision, setRevision] = useState('0')
   const [reportDate, setReportDate] = useState(isoToday())
+  /** Дата акта ВЕК у підставах звіту (текст «від …»); дата звіту — окремо в колонці таблиці */
+  const [actDate, setActDate] = useState(isoToday())
+  const [analysisProposedVek, setAnalysisProposedVek] = useState('')
+  const [analysisProposedCheck, setAnalysisProposedCheck] = useState('')
+  const [analysisActual, setAnalysisActual] = useState('')
+  const [analysisReasonText, setAnalysisReasonText] = useState('')
+  const [analysisViolation, setAnalysisViolation] = useState('')
+  const [analysisCorrective, setAnalysisCorrective] = useState('')
 
   const [siteName, setSiteName] = useState('')
   const [siteOptions, setSiteOptions] = useState([])
@@ -125,6 +143,8 @@ function App() {
 
   const [rows, setRows] = useState([emptyRow(1)])
   const [photos, setPhotos] = useState([])
+  const [closureRows, setClosureRows] = useState([emptyClosureRow()])
+  const [closureComments, setClosureComments] = useState('')
 
   const [availableResponsibles, setAvailableResponsibles] = useState([])
 
@@ -390,6 +410,11 @@ function App() {
     }
   }, [branch])
 
+  useEffect(() => {
+    if (docKind !== DOC_KIND.REPORT) return
+    setAnalysisViolation((rows[0]?.description || '').trim())
+  }, [docKind, rows[0]?.description])
+
   const canSubmit = useMemo(() => {
     return siteName.trim() && inspectionForm.trim() && inspectorFullName.trim() && unitRepFullName.trim()
   }, [siteName, inspectionForm, inspectorFullName, unitRepFullName])
@@ -437,6 +462,21 @@ function App() {
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
+  const addClosureRow = () => {
+    setClosureRows((prev) => [...prev, emptyClosureRow()])
+  }
+
+  const removeClosureRow = (idx) => {
+    setClosureRows((prev) => {
+      const next = prev.filter((_, i) => i !== idx)
+      return next.length ? next : [emptyClosureRow()]
+    })
+  }
+
+  const updateClosureRow = (idx, patch) => {
+    setClosureRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
+  }
+
   const downloadBlob = (blob, filename) => {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -457,6 +497,7 @@ function App() {
       fd.append('branch', branch)
       fd.append('revision', revision)
       fd.append('report_date', reportDate)
+      fd.append('act_date', docKind === DOC_KIND.REPORT ? actDate : reportDate)
       fd.append('site_name', siteName)
       fd.append('inspection_form', inspectionForm)
       fd.append('inspector_full_name', inspectorFullName)
@@ -472,16 +513,48 @@ function App() {
       fd.append('additional_unit_representatives_json', JSON.stringify(additionalPayload))
 
       const normalizedRows = rows
-        .filter((r) => r.description.trim() || r.corrective_actions.trim() || r.responsible.trim() || r.due_date)
+        .filter((r) => {
+          if (docKind === DOC_KIND.REPORT) {
+            return (
+              r.description.trim() ||
+              r.corrective_actions.trim() ||
+              r.execution_percent?.trim() ||
+              r.responsible.trim() ||
+              r.due_date
+            )
+          }
+          return r.description.trim() || r.corrective_actions.trim() || r.responsible.trim() || r.due_date
+        })
         .map((r, i) => ({
           ...r,
           order_number: i + 1,
           due_date: r.due_date || null,
+          execution_percent: (r.execution_percent ?? '').trim(),
         }))
       fd.append('nonconformities_json', JSON.stringify(normalizedRows))
 
-      for (const f of photos) {
-        fd.append('photos', f, f.name)
+      fd.append('analysis_proposed_vek', analysisProposedVek)
+      fd.append('analysis_proposed_check', analysisProposedCheck)
+      fd.append('analysis_actual', analysisActual)
+      fd.append('analysis_reason_text', analysisReasonText)
+      fd.append('analysis_violation', analysisViolation)
+      fd.append('analysis_corrective_action', analysisCorrective)
+
+      if (docKind === DOC_KIND.REPORT) {
+        const closurePayload = closureRows
+          .map((r) => ({
+            corrective_action: (r.corrective_action || '').trim(),
+            completed: (r.completed || '').trim(),
+          }))
+          .filter((r) => r.corrective_action || r.completed)
+        fd.append('closure_rows_json', JSON.stringify(closurePayload))
+        fd.append('closure_comments', closureComments)
+      }
+
+      if (docKind === DOC_KIND.ACT) {
+        for (const f of photos) {
+          fd.append('photos', f, f.name)
+        }
       }
 
       const res = await fetch(`${API_BASE}/api/generate-pdf/`, {
@@ -495,7 +568,7 @@ function App() {
       }
 
       const blob = await res.blob()
-      downloadBlob(blob, docKind === DOC_KIND.REPORT ? 'Звіт_з_перевірки.pdf' : 'Акт_ВЕК.pdf')
+      downloadBlob(blob, docKind === DOC_KIND.REPORT ? 'Звіт_Ф-15-02.pdf' : 'Акт_ВЕК.pdf')
     } catch (e) {
       setError(e?.message || 'Помилка формування PDF')
     } finally {
@@ -568,7 +641,15 @@ function App() {
           <Card variant="outline" {...CARD_PROPS}>
             <CardBody>
               <VStack align="stretch" spacing={4}>
-                <SectionHeader eyebrow="01" title="Шапка документа" description="Філія, редакція та дата акта." />
+                <SectionHeader
+                  eyebrow="01"
+                  title="Шапка документа"
+                  description={
+                    docKind === DOC_KIND.REPORT
+                      ? 'Форма Ф-15-02: окремо дата складання акта (підстави ВЕК) та дата звіту (колонка таблиці).'
+                      : 'Філія, редакція та дата акта.'
+                  }
+                />
 
                 <FormControl>
                   <FormLabel>Філія</FormLabel>
@@ -592,13 +673,31 @@ function App() {
                   </Select>
                 </FormControl>
 
-                <HStack spacing={3} align="start">
+                <HStack spacing={3} align="start" flexWrap="wrap">
                   <FormControl>
                     <FormLabel>Редакція</FormLabel>
                     <Input minH={MIN_TAP_H} value={revision} onChange={(e) => setRevision(e.target.value)} {...FIELD_PROPS} />
                   </FormControl>
+                  {docKind === DOC_KIND.REPORT ? (
+                    <FormControl>
+                      <FormLabel>Дата складання акта</FormLabel>
+                      <InputGroup>
+                        <InputLeftElement h={MIN_TAP_H} pointerEvents="none" color="#2f4f6f">
+                          📅
+                        </InputLeftElement>
+                        <Input
+                          minH={MIN_TAP_H}
+                          type="date"
+                          value={actDate}
+                          onChange={(e) => setActDate(e.target.value)}
+                          pl={10}
+                          {...FIELD_PROPS}
+                        />
+                      </InputGroup>
+                    </FormControl>
+                  ) : null}
                   <FormControl>
-                    <FormLabel>Дата</FormLabel>
+                    <FormLabel>{docKind === DOC_KIND.REPORT ? 'Дата звіту' : 'Дата'}</FormLabel>
                     <InputGroup>
                       <InputLeftElement h={MIN_TAP_H} pointerEvents="none" color="#2f4f6f">
                         📅
@@ -624,7 +723,11 @@ function App() {
                 <SectionHeader
                   eyebrow="02"
                   title="Основні дані"
-                  description="Підрозділ, формат перевірки та відповідальні особи."
+                  description={
+                    docKind === DOC_KIND.REPORT
+                      ? 'Підрозділ та особи заповнюються автоматично з обраної дільниці; за потреби відредагуйте вручну.'
+                      : 'Підрозділ, формат перевірки та відповідальні особи.'
+                  }
                 />
 
                 <FormControl isRequired>
@@ -650,19 +753,21 @@ function App() {
                   </Select>
                 </FormControl>
 
-                <FormControl isRequired>
-                  <FormLabel>Форма перевірки</FormLabel>
-                  <Select
-                    minH={MIN_TAP_H}
-                    value={inspectionForm}
-                    onChange={(e) => setInspectionForm(e.target.value)}
-                    bg="white"
-                    borderColor="blackAlpha.300"
-                  >
-                    <option value="планова">планова</option>
-                    <option value="позапланова">позапланова</option>
-                  </Select>
-                </FormControl>
+                {docKind === DOC_KIND.ACT ? (
+                  <FormControl isRequired>
+                    <FormLabel>Форма перевірки</FormLabel>
+                    <Select
+                      minH={MIN_TAP_H}
+                      value={inspectionForm}
+                      onChange={(e) => setInspectionForm(e.target.value)}
+                      bg="white"
+                      borderColor="blackAlpha.300"
+                    >
+                      <option value="планова">планова</option>
+                      <option value="позапланова">позапланова</option>
+                    </Select>
+                  </FormControl>
+                ) : null}
 
                 <FormControl isRequired>
                   <FormLabel>ПІБ еколога</FormLabel>
@@ -769,7 +874,15 @@ function App() {
             <CardBody>
               <VStack align="stretch" spacing={4}>
                 <HStack justify="space-between">
-                  <SectionHeader eyebrow="03" title="Невідповідності" />
+                  <SectionHeader
+                    eyebrow="03"
+                    title={docKind === DOC_KIND.REPORT ? 'Спостережувана невідповідність' : 'Невідповідності'}
+                    description={
+                      docKind === DOC_KIND.REPORT
+                        ? 'Опис невідповідності; стадія — один із трьох варіантів; окремо відсоток виконання.'
+                        : undefined
+                    }
+                  />
                   <Button minH={MIN_TAP_H} bg="#2f4f6f" color="white" _hover={{ bg: '#263f59' }} onClick={addRow}>
                     Додати рядок
                   </Button>
@@ -794,7 +907,9 @@ function App() {
                           </HStack>
 
                           <FormControl>
-                            <FormLabel>Опис порушення</FormLabel>
+                            <FormLabel>
+                              {docKind === DOC_KIND.REPORT ? 'Виявлена при ВЕК (опис)' : 'Опис порушення'}
+                            </FormLabel>
                             <Select
                               minH={MIN_TAP_H}
                               placeholder="Обрати зі списку (або введіть вручну нижче)"
@@ -821,77 +936,121 @@ function App() {
                           </FormControl>
 
                           <FormControl>
-                            <FormLabel>Коригуюча дія</FormLabel>
-                            <Select
-                              minH={MIN_TAP_H}
-                              placeholder="Обрати зі списку (або введіть вручну нижче)"
-                              value=""
-                              onChange={(e) => {
-                                if (e.target.value) updateRow(idx, { corrective_actions: e.target.value })
-                              }}
-                              bg="white"
-                              borderColor="blackAlpha.300"
-                            >
-                              {correctiveActionOptions.map((opt) => (
-                                <option key={opt} value={opt}>
-                                  {opt}
-                                </option>
-                              ))}
-                            </Select>
-                            <Textarea
-                              minH="80px"
-                              mt={2}
-                              value={r.corrective_actions}
-                              onChange={(e) => updateRow(idx, { corrective_actions: e.target.value })}
-                              {...FIELD_PROPS}
-                            />
-                          </FormControl>
-
-                          <FormControl>
-                            <FormLabel>Відповідальний</FormLabel>
-                            {availableResponsibles.length > 0 ? (
+                            <FormLabel>
+                              {docKind === DOC_KIND.REPORT ? 'Стадія виконання' : 'Коригуюча дія'}
+                            </FormLabel>
+                            {docKind === DOC_KIND.REPORT ? (
                               <Select
                                 minH={MIN_TAP_H}
-                                placeholder="Обрати зі списку (або введіть вручну нижче)"
-                                value=""
-                                onChange={(e) => {
-                                  if (e.target.value) updateRow(idx, { responsible: e.target.value })
-                                }}
+                                placeholder="Оберіть стадію"
+                                value={
+                                  REPORT_STAGE_OPTIONS.includes((r.corrective_actions || '').trim())
+                                    ? (r.corrective_actions || '').trim()
+                                    : ''
+                                }
+                                onChange={(e) => updateRow(idx, { corrective_actions: e.target.value })}
                                 bg="white"
                                 borderColor="blackAlpha.300"
-                                mb={2}
                               >
-                                {availableResponsibles.map((opt) => (
+                                <option value="">Оберіть стадію</option>
+                                {REPORT_STAGE_OPTIONS.map((opt) => (
                                   <option key={opt} value={opt}>
                                     {opt}
                                   </option>
                                 ))}
                               </Select>
-                            ) : null}
-                            <Input
-                              minH={MIN_TAP_H}
-                              value={r.responsible}
-                              onChange={(e) => updateRow(idx, { responsible: e.target.value })}
-                              {...FIELD_PROPS}
-                            />
+                            ) : (
+                              <>
+                                <Select
+                                  minH={MIN_TAP_H}
+                                  placeholder="Обрати зі списку (або введіть вручну нижче)"
+                                  value=""
+                                  onChange={(e) => {
+                                    if (e.target.value) updateRow(idx, { corrective_actions: e.target.value })
+                                  }}
+                                  bg="white"
+                                  borderColor="blackAlpha.300"
+                                >
+                                  {correctiveActionOptions.map((opt) => (
+                                    <option key={opt} value={opt}>
+                                      {opt}
+                                    </option>
+                                  ))}
+                                </Select>
+                                <Textarea
+                                  minH="80px"
+                                  mt={2}
+                                  value={r.corrective_actions}
+                                  onChange={(e) => updateRow(idx, { corrective_actions: e.target.value })}
+                                  {...FIELD_PROPS}
+                                />
+                              </>
+                            )}
                           </FormControl>
 
-                          <FormControl>
-                            <FormLabel>Термін</FormLabel>
-                            <InputGroup>
-                              <InputLeftElement h={MIN_TAP_H} pointerEvents="none" color="#2f4f6f">
-                                📅
-                              </InputLeftElement>
+                          {docKind === DOC_KIND.REPORT ? (
+                            <FormControl>
+                              <FormLabel>Виконання, %</FormLabel>
                               <Input
                                 minH={MIN_TAP_H}
-                                type="date"
-                                value={r.due_date}
-                                onChange={(e) => updateRow(idx, { due_date: e.target.value })}
-                                pl={10}
+                                placeholder="100"
+                                inputMode="numeric"
+                                value={r.execution_percent ?? '100'}
+                                onChange={(e) => updateRow(idx, { execution_percent: e.target.value })}
                                 {...FIELD_PROPS}
                               />
-                            </InputGroup>
-                          </FormControl>
+                            </FormControl>
+                          ) : null}
+
+                          {docKind === DOC_KIND.ACT ? (
+                            <>
+                              <FormControl>
+                                <FormLabel>Відповідальний</FormLabel>
+                                {availableResponsibles.length > 0 ? (
+                                  <Select
+                                    minH={MIN_TAP_H}
+                                    placeholder="Обрати зі списку (або введіть вручну нижче)"
+                                    value=""
+                                    onChange={(e) => {
+                                      if (e.target.value) updateRow(idx, { responsible: e.target.value })
+                                    }}
+                                    bg="white"
+                                    borderColor="blackAlpha.300"
+                                    mb={2}
+                                  >
+                                    {availableResponsibles.map((opt) => (
+                                      <option key={opt} value={opt}>
+                                        {opt}
+                                      </option>
+                                    ))}
+                                  </Select>
+                                ) : null}
+                                <Input
+                                  minH={MIN_TAP_H}
+                                  value={r.responsible}
+                                  onChange={(e) => updateRow(idx, { responsible: e.target.value })}
+                                  {...FIELD_PROPS}
+                                />
+                              </FormControl>
+
+                              <FormControl>
+                                <FormLabel>Термін</FormLabel>
+                                <InputGroup>
+                                  <InputLeftElement h={MIN_TAP_H} pointerEvents="none" color="#2f4f6f">
+                                    📅
+                                  </InputLeftElement>
+                                  <Input
+                                    minH={MIN_TAP_H}
+                                    type="date"
+                                    value={r.due_date}
+                                    onChange={(e) => updateRow(idx, { due_date: e.target.value })}
+                                    pl={10}
+                                    {...FIELD_PROPS}
+                                  />
+                                </InputGroup>
+                              </FormControl>
+                            </>
+                          ) : null}
                         </VStack>
                       </CardBody>
                     </Card>
@@ -901,40 +1060,271 @@ function App() {
             </CardBody>
           </Card>
 
+          {docKind === DOC_KIND.REPORT ? (
+            <Card variant="outline" {...CARD_PROPS}>
+              <CardBody>
+                <VStack align="stretch" spacing={4}>
+                  <SectionHeader
+                    eyebrow="04"
+                    title="Аналіз причин невідповідностей"
+                    description="Дати та блок «Причина…» потрапляють у PDF. Порушення за замовчуванням як у першому рядку таблиці невідповідностей."
+                  />
+                  <HStack spacing={3} align="start" flexWrap="wrap">
+                    <FormControl>
+                      <FormLabel>Запропонована дата: під час ВЕК</FormLabel>
+                      <InputGroup>
+                        <InputLeftElement h={MIN_TAP_H} pointerEvents="none" color="#2f4f6f">
+                          📅
+                        </InputLeftElement>
+                        <Input
+                          minH={MIN_TAP_H}
+                          type="date"
+                          value={analysisProposedVek}
+                          onChange={(e) => setAnalysisProposedVek(e.target.value)}
+                          pl={10}
+                          {...FIELD_PROPS}
+                        />
+                      </InputGroup>
+                    </FormControl>
+                    <FormControl>
+                      <FormLabel>Запропонована дата: при перевірці виконання</FormLabel>
+                      <InputGroup>
+                        <InputLeftElement h={MIN_TAP_H} pointerEvents="none" color="#2f4f6f">
+                          📅
+                        </InputLeftElement>
+                        <Input
+                          minH={MIN_TAP_H}
+                          type="date"
+                          value={analysisProposedCheck}
+                          onChange={(e) => setAnalysisProposedCheck(e.target.value)}
+                          pl={10}
+                          {...FIELD_PROPS}
+                        />
+                      </InputGroup>
+                    </FormControl>
+                    <FormControl>
+                      <FormLabel>Реальна дата виконання</FormLabel>
+                      <InputGroup>
+                        <InputLeftElement h={MIN_TAP_H} pointerEvents="none" color="#2f4f6f">
+                          📅
+                        </InputLeftElement>
+                        <Input
+                          minH={MIN_TAP_H}
+                          type="date"
+                          value={analysisActual}
+                          onChange={(e) => setAnalysisActual(e.target.value)}
+                          pl={10}
+                          {...FIELD_PROPS}
+                        />
+                      </InputGroup>
+                    </FormControl>
+                  </HStack>
+                  <Text fontSize="sm" color="gray.600">
+                    Колонка «Представник підрозділу» у PDF береться з ПІБ та посади представника вище.
+                  </Text>
+
+                  <FormControl>
+                    <FormLabel>Порушення</FormLabel>
+                    <Select
+                      minH={MIN_TAP_H}
+                      placeholder="Обрати зі списку (як у акті)"
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) setAnalysisViolation(e.target.value)
+                      }}
+                      bg="white"
+                      borderColor="blackAlpha.300"
+                    >
+                      {nonconformityDescriptionOptions.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </Select>
+                    <Textarea
+                      minH="96px"
+                      mt={2}
+                      value={analysisViolation}
+                      onChange={(e) => setAnalysisViolation(e.target.value)}
+                      placeholder="Текст порушення; синхронізується з першим рядком невідповідностей"
+                      {...FIELD_PROPS}
+                    />
+                  </FormControl>
+
+                  <FormControl>
+                    <FormLabel>Причина</FormLabel>
+                    <Textarea
+                      minH="80px"
+                      value={analysisReasonText}
+                      onChange={(e) => setAnalysisReasonText(e.target.value)}
+                      placeholder="Вкажіть причину вручну"
+                      {...FIELD_PROPS}
+                    />
+                  </FormControl>
+
+                  <FormControl>
+                    <FormLabel>Коригуюча дія</FormLabel>
+                    <Select
+                      minH={MIN_TAP_H}
+                      placeholder="Обрати зі списку (як у акті)"
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) setAnalysisCorrective(e.target.value)
+                      }}
+                      bg="white"
+                      borderColor="blackAlpha.300"
+                    >
+                      {correctiveActionOptions.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </Select>
+                    <Textarea
+                      minH="80px"
+                      mt={2}
+                      value={analysisCorrective}
+                      onChange={(e) => setAnalysisCorrective(e.target.value)}
+                      {...FIELD_PROPS}
+                    />
+                  </FormControl>
+                </VStack>
+              </CardBody>
+            </Card>
+          ) : null}
+
           <Card variant="outline" {...CARD_PROPS}>
             <CardBody>
               <VStack align="stretch" spacing={4}>
-                <SectionHeader eyebrow="04" title="Фотофіксація" description="Додайте фото порушень до матеріалів акта." />
+                {docKind === DOC_KIND.REPORT ? (
+                  <>
+                    <SectionHeader
+                      eyebrow="05"
+                      title="Звіт про закриття невідповідностей"
+                      description="Заповнюється перевіряючим: оберіть коригуючу дії та відмітку виконання (Так / Ні). Фотофіксація для звіту не додається."
+                    />
 
-                <FormControl>
-                  <FormLabel>Завантажити фото порушень</FormLabel>
-                  <Input
-                    ref={fileInputRef}
-                    minH={MIN_TAP_H}
-                    type="file"
-                    multiple
-                    accept="image/*"
-                    onChange={onPhotosChange}
-                    p={2}
-                    {...FIELD_PROPS}
-                  />
-                  {photos.length ? (
-                    <Text fontSize="sm" color="gray.600" mt={2}>
-                      Обрано: {photos.length} фото
+                    <VStack align="stretch" spacing={4}>
+                      {closureRows.map((r, idx) => (
+                        <Box
+                          key={idx}
+                          borderWidth="1px"
+                          borderColor="blackAlpha.200"
+                          borderRadius="md"
+                          p={3}
+                          bg="#faf8f3"
+                        >
+                          <VStack align="stretch" spacing={3}>
+                            <FormControl>
+                              <FormLabel>Коригуюча дія</FormLabel>
+                              <Select
+                                minH={MIN_TAP_H}
+                                placeholder="Оберіть зі списку"
+                                value={r.corrective_action}
+                                onChange={(e) =>
+                                  updateClosureRow(idx, { corrective_action: e.target.value })
+                                }
+                                bg="white"
+                                borderColor="blackAlpha.300"
+                              >
+                                <option value="">—</option>
+                                {correctiveActionOptions.map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </Select>
+                            </FormControl>
+
+                            <FormControl>
+                              <FormLabel>Виконано</FormLabel>
+                              <RadioGroup
+                                value={r.completed}
+                                onChange={(val) => updateClosureRow(idx, { completed: val })}
+                              >
+                                <HStack spacing={6}>
+                                  <Radio value="yes">Так</Radio>
+                                  <Radio value="no">Ні</Radio>
+                                </HStack>
+                              </RadioGroup>
+                            </FormControl>
+
+                            {closureRows.length > 1 ? (
+                              <Button
+                                minH={MIN_TAP_H}
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                alignSelf="flex-start"
+                                onClick={() => removeClosureRow(idx)}
+                              >
+                                Видалити рядок
+                              </Button>
+                            ) : null}
+                          </VStack>
+                        </Box>
+                      ))}
+
+                      <Button minH={MIN_TAP_H} type="button" variant="outline" onClick={addClosureRow}>
+                        Додати рядок
+                      </Button>
+                    </VStack>
+
+                    <FormControl>
+                      <FormLabel>Коментарі</FormLabel>
+                      <Textarea
+                        minH="96px"
+                        value={closureComments}
+                        onChange={(e) => setClosureComments(e.target.value)}
+                        placeholder="Додаткові коментарі перевіряючого"
+                        {...FIELD_PROPS}
+                      />
+                    </FormControl>
+
+                    <Text fontSize="sm" color="gray.600">
+                      У PDF автоматично формується блок «Кінцеве заключення» за відмітками Так/Ні; перевіряючий —
+                      як указано вище в формі ({inspectorFullName || 'ПІБ'}).
                     </Text>
-                  ) : null}
-                </FormControl>
+                  </>
+                ) : (
+                  <>
+                    <SectionHeader
+                      eyebrow="05"
+                      title="Фотофіксація"
+                      description="Додайте фото порушень до матеріалів акта."
+                    />
 
-                {photos.length ? (
-                  <HStack flexWrap="wrap" spacing={3}>
-                    <Button minH={MIN_TAP_H} type="button" variant="outline" onClick={openPhotoPicker}>
-                      Додати ще фото
-                    </Button>
-                    <Button minH={MIN_TAP_H} variant="outline" onClick={resetPhotos}>
-                      Очистити фото
-                    </Button>
-                  </HStack>
-                ) : null}
+                    <FormControl>
+                      <FormLabel>Завантажити фото порушень</FormLabel>
+                      <Input
+                        ref={fileInputRef}
+                        minH={MIN_TAP_H}
+                        type="file"
+                        multiple
+                        accept="image/*"
+                        onChange={onPhotosChange}
+                        p={2}
+                        {...FIELD_PROPS}
+                      />
+                      {photos.length ? (
+                        <Text fontSize="sm" color="gray.600" mt={2}>
+                          Обрано: {photos.length} фото
+                        </Text>
+                      ) : null}
+                    </FormControl>
+
+                    {photos.length ? (
+                      <HStack flexWrap="wrap" spacing={3}>
+                        <Button minH={MIN_TAP_H} type="button" variant="outline" onClick={openPhotoPicker}>
+                          Додати ще фото
+                        </Button>
+                        <Button minH={MIN_TAP_H} variant="outline" onClick={resetPhotos}>
+                          Очистити фото
+                        </Button>
+                      </HStack>
+                    ) : null}
+                  </>
+                )}
               </VStack>
             </CardBody>
           </Card>
