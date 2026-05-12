@@ -623,6 +623,7 @@ def build_environmental_report_pdf(
     analysis_reason_text: str = "",
     analysis_violation: str = "",
     analysis_corrective_action: str = "",
+    analysis_cause_rows: Iterable[tuple[str, str, str]] | None = None,
     closure_rows: Iterable[tuple[str, str]] | None = None,
     closure_comments: str = "",
 ) -> bytes:
@@ -992,11 +993,28 @@ def build_environmental_report_pdf(
             s = (text or "").strip()
             return _p(html.escape(s, quote=False), base) if s else Paragraph("", base)
 
-        _viol_txt = (analysis_violation or "").strip()
-        if not _viol_txt:
-            _nc_list = list(nonconformities)
-            if _nc_list:
-                _viol_txt = (_nc_list[0].description or "").strip()
+        cause_rows_pdf: list[tuple[str, str, str]] = []
+        if analysis_cause_rows is not None:
+            for item in analysis_cause_rows:
+                if isinstance(item, (list, tuple)) and len(item) >= 3:
+                    v = str(item[0] or "").strip()
+                    rsn = str(item[1] or "").strip()
+                    corr = str(item[2] or "").strip()
+                    if v or rsn or corr:
+                        cause_rows_pdf.append((v, rsn, corr))
+        if not cause_rows_pdf:
+            _viol_txt = (analysis_violation or "").strip()
+            if not _viol_txt:
+                _nc_list = list(nonconformities)
+                if _nc_list:
+                    _viol_txt = (_nc_list[0].description or "").strip()
+            cause_rows_pdf.append(
+                (
+                    _viol_txt,
+                    (analysis_reason_text or "").strip(),
+                    (analysis_corrective_action or "").strip(),
+                )
+            )
 
         cause_w = doc.width
         cw3 = [cause_w / 3.0, cause_w / 3.0, cause_w / 3.0]
@@ -1006,12 +1024,15 @@ def build_environmental_report_pdf(
                 "",
                 "",
             ],
-            [
-                _cause_cell_paragraph(_viol_txt),
-                _cause_cell_paragraph(analysis_reason_text),
-                _cause_cell_paragraph(analysis_corrective_action),
-            ],
         ]
+        for v, rsn, corr in cause_rows_pdf:
+            cause_data.append(
+                [
+                    _cause_cell_paragraph(v),
+                    _cause_cell_paragraph(rsn),
+                    _cause_cell_paragraph(corr),
+                ]
+            )
         cause_tbl = Table(cause_data, colWidths=cw3)
         cause_tbl.hAlign = "CENTER"
         cause_ts = [
@@ -1022,7 +1043,7 @@ def build_environmental_report_pdf(
             ("SPAN", (0, 0), (2, 0)),
             ("BACKGROUND", (0, 0), (2, 0), colors.whitesmoke),
             ("ALIGN", (0, 0), (-1, 0), "CENTER"),
-            ("ALIGN", (0, 1), (-1, 1), "LEFT"),
+            ("ALIGN", (0, 1), (-1, -1), "LEFT"),
             ("LEFTPADDING", (0, 0), (-1, -1), 3),
             ("RIGHTPADDING", (0, 0), (-1, -1), 3),
             ("TOPPADDING", (0, 0), (-1, -1), 2),
@@ -1238,13 +1259,14 @@ def build_environmental_report_pdf(
 
         story.append(tbl)
 
-        # Підписи під таблицею (бланк)
-        story.append(Spacer(1, 12))
-        story.append(_p("Підписи:", label_b))
-        story.append(Spacer(1, 6))
+        # Підписи під таблицею — одним блоком: якщо не вміщаються внизу сторінки, переносяться разом
+        sig_block: list = []
+        sig_block.append(Spacer(1, 12))
+        sig_block.append(_p("Підписи:", label_b))
+        sig_block.append(Spacer(1, 6))
 
-        story.append(_p("Перевіряючий (посада)", sig_label))
-        story.append(
+        sig_block.append(_p("Перевіряючий (посада)", sig_label))
+        sig_block.append(
             _two_signature_lines_row(
                 layout_width=doc.width,
                 left_value=inspector_position or "",
@@ -1256,10 +1278,10 @@ def build_environmental_report_pdf(
                 cell_pad_right=SIG_PIB_RIGHT_MARGIN,
             )
         )
-        story.append(Spacer(1, 10))
+        sig_block.append(Spacer(1, 10))
 
-        story.append(_p("Представник підрозділу (посада)", sig_label))
-        story.append(
+        sig_block.append(_p("Представник підрозділу (посада)", sig_label))
+        sig_block.append(
             _two_signature_lines_row(
                 layout_width=doc.width,
                 left_value=unit_representative_position or "",
@@ -1278,9 +1300,9 @@ def build_environmental_report_pdf(
             name_s = (full_name or "").strip()
             if not pos_s and not name_s:
                 continue
-            story.append(Spacer(1, 10))
-            story.append(_p("Представник підрозділу (посада)", sig_label))
-            story.append(
+            sig_block.append(Spacer(1, 10))
+            sig_block.append(_p("Представник підрозділу (посада)", sig_label))
+            sig_block.append(
                 _two_signature_lines_row(
                     layout_width=doc.width,
                     left_value=pos_s,
@@ -1292,6 +1314,8 @@ def build_environmental_report_pdf(
                     cell_pad_right=SIG_PIB_RIGHT_MARGIN,
                 )
             )
+
+        story.append(KeepTogether(sig_block))
 
     photos = list(photo_items)
     if photos and kind != "report":

@@ -43,6 +43,15 @@ const FIELD_PROPS = {
   borderColor: 'blackAlpha.300',
   _hover: { borderColor: 'blackAlpha.500' },
 }
+/** Як кнопка «Додати рядок» у блоці невідповідностей (блок 3) */
+const ADD_ROW_BUTTON_PROPS = {
+  minH: MIN_TAP_H,
+  type: 'button',
+  bg: '#2f4f6f',
+  color: 'white',
+  _hover: { bg: '#263f59' },
+  alignSelf: 'flex-start',
+}
 
 const BRANCH_OPTIONS_FALLBACK = ['Філія 1', 'Філія 2', 'Філія 3']
 const NONCONFORMITY_DESCRIPTIONS_FALLBACK = [
@@ -89,6 +98,10 @@ function emptyClosureRow() {
   return { corrective_action: '', completed: '' }
 }
 
+function emptyAnalysisCauseRow() {
+  return { violation: '', reason: '', corrective: '' }
+}
+
 function SectionHeader({ eyebrow, title, description }) {
   return (
     <VStack align="stretch" spacing={1}>
@@ -128,9 +141,7 @@ function App() {
   const [analysisProposedVek, setAnalysisProposedVek] = useState('')
   const [analysisProposedCheck, setAnalysisProposedCheck] = useState('')
   const [analysisActual, setAnalysisActual] = useState('')
-  const [analysisReasonText, setAnalysisReasonText] = useState('')
-  const [analysisViolation, setAnalysisViolation] = useState('')
-  const [analysisCorrective, setAnalysisCorrective] = useState('')
+  const [analysisCauseRows, setAnalysisCauseRows] = useState([emptyAnalysisCauseRow()])
 
   const [siteName, setSiteName] = useState('')
   const [siteOptions, setSiteOptions] = useState([])
@@ -412,7 +423,12 @@ function App() {
 
   useEffect(() => {
     if (docKind !== DOC_KIND.REPORT) return
-    setAnalysisViolation((rows[0]?.description || '').trim())
+    const d = (rows[0]?.description || '').trim()
+    setAnalysisCauseRows((prev) => {
+      const base = prev.length ? [...prev] : [emptyAnalysisCauseRow()]
+      base[0] = { ...base[0], violation: d }
+      return base
+    })
   }, [docKind, rows[0]?.description])
 
   const canSubmit = useMemo(() => {
@@ -420,7 +436,16 @@ function App() {
   }, [siteName, inspectionForm, inspectorFullName, unitRepFullName])
 
   const addRow = () => {
-    setRows((prev) => [...prev, emptyRow(prev.length + 1)])
+    setRows((prev) => {
+      const nextNum = prev.length + 1
+      const newRow = emptyRow(nextNum)
+      if (docKind === DOC_KIND.ACT) {
+        const fromForm = formatResponsibleFromUnitRep(unitRepPosition, unitRepFullName).trim()
+        const fromRef = (lastAutoResponsibleRef.current || '').trim()
+        newRow.responsible = fromForm || fromRef
+      }
+      return [...prev, newRow]
+    })
   }
 
   const removeRow = (idx) => {
@@ -475,6 +500,21 @@ function App() {
 
   const updateClosureRow = (idx, patch) => {
     setClosureRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
+  }
+
+  const addAnalysisCauseRow = () => {
+    setAnalysisCauseRows((prev) => [...prev, emptyAnalysisCauseRow()])
+  }
+
+  const removeAnalysisCauseRow = (idx) => {
+    setAnalysisCauseRows((prev) => {
+      const next = prev.filter((_, i) => i !== idx)
+      return next.length ? next : [emptyAnalysisCauseRow()]
+    })
+  }
+
+  const updateAnalysisCauseRow = (idx, patch) => {
+    setAnalysisCauseRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
   }
 
   const downloadBlob = (blob, filename) => {
@@ -536,11 +576,19 @@ function App() {
       fd.append('analysis_proposed_vek', analysisProposedVek)
       fd.append('analysis_proposed_check', analysisProposedCheck)
       fd.append('analysis_actual', analysisActual)
-      fd.append('analysis_reason_text', analysisReasonText)
-      fd.append('analysis_violation', analysisViolation)
-      fd.append('analysis_corrective_action', analysisCorrective)
-
+      const firstCause = analysisCauseRows[0] || emptyAnalysisCauseRow()
+      fd.append('analysis_reason_text', (firstCause.reason || '').trim())
+      fd.append('analysis_violation', (firstCause.violation || '').trim())
+      fd.append('analysis_corrective_action', (firstCause.corrective || '').trim())
       if (docKind === DOC_KIND.REPORT) {
+        const causePayload = analysisCauseRows
+          .map((r) => ({
+            violation: (r.violation || '').trim(),
+            reason: (r.reason || '').trim(),
+            corrective: (r.corrective || '').trim(),
+          }))
+          .filter((r) => r.violation || r.reason || r.corrective)
+        fd.append('analysis_cause_rows_json', JSON.stringify(causePayload))
         const closurePayload = closureRows
           .map((r) => ({
             corrective_action: (r.corrective_action || '').trim(),
@@ -646,7 +694,7 @@ function App() {
                   title="Шапка документа"
                   description={
                     docKind === DOC_KIND.REPORT
-                      ? 'Форма Ф-15-02: окремо дата складання акта (підстави ВЕК) та дата звіту (колонка таблиці).'
+                      ? 'Ф-15-02 — звіт з виконання перевірки.'
                       : 'Філія, редакція та дата акта.'
                   }
                 />
@@ -725,7 +773,7 @@ function App() {
                   title="Основні дані"
                   description={
                     docKind === DOC_KIND.REPORT
-                      ? 'Підрозділ та особи заповнюються автоматично з обраної дільниці; за потреби відредагуйте вручну.'
+                      ? 'Підрозділ і ПІБ можуть підставитися зі списку; за потреби змініть вручну.'
                       : 'Підрозділ, формат перевірки та відповідальні особи.'
                   }
                 />
@@ -873,20 +921,15 @@ function App() {
           <Card variant="outline" {...CARD_PROPS}>
             <CardBody>
               <VStack align="stretch" spacing={4}>
-                <HStack justify="space-between">
-                  <SectionHeader
-                    eyebrow="03"
-                    title={docKind === DOC_KIND.REPORT ? 'Спостережувана невідповідність' : 'Невідповідності'}
-                    description={
-                      docKind === DOC_KIND.REPORT
-                        ? 'Опис невідповідності; стадія — один із трьох варіантів; окремо відсоток виконання.'
-                        : undefined
-                    }
-                  />
-                  <Button minH={MIN_TAP_H} bg="#2f4f6f" color="white" _hover={{ bg: '#263f59' }} onClick={addRow}>
-                    Додати рядок
-                  </Button>
-                </HStack>
+                <SectionHeader
+                  eyebrow="03"
+                  title={docKind === DOC_KIND.REPORT ? 'Спостережувана невідповідність' : 'Невідповідності'}
+                  description={
+                    docKind === DOC_KIND.REPORT
+                      ? 'Опис невідповідності, стадія та відсоток виконання.'
+                      : undefined
+                  }
+                />
 
                 <VStack align="stretch" spacing={3}>
                   {rows.map((r, idx) => (
@@ -1034,7 +1077,7 @@ function App() {
                               </FormControl>
 
                               <FormControl>
-                                <FormLabel>Термін</FormLabel>
+                                <FormLabel>Строк виконання</FormLabel>
                                 <InputGroup>
                                   <InputLeftElement h={MIN_TAP_H} pointerEvents="none" color="#2f4f6f">
                                     📅
@@ -1056,6 +1099,10 @@ function App() {
                     </Card>
                   ))}
                 </VStack>
+
+                <Button {...ADD_ROW_BUTTON_PROPS} onClick={addRow}>
+                  Додати рядок
+                </Button>
               </VStack>
             </CardBody>
           </Card>
@@ -1064,11 +1111,7 @@ function App() {
             <Card variant="outline" {...CARD_PROPS}>
               <CardBody>
                 <VStack align="stretch" spacing={4}>
-                  <SectionHeader
-                    eyebrow="04"
-                    title="Аналіз причин невідповідностей"
-                    description="Дати та блок «Причина…» потрапляють у PDF. Порушення за замовчуванням як у першому рядку таблиці невідповідностей."
-                  />
+                  <SectionHeader eyebrow="04" title="Аналіз причин невідповідностей" />
                   <HStack spacing={3} align="start" flexWrap="wrap">
                     <FormControl>
                       <FormLabel>Запропонована дата: під час ВЕК</FormLabel>
@@ -1119,75 +1162,112 @@ function App() {
                       </InputGroup>
                     </FormControl>
                   </HStack>
-                  <Text fontSize="sm" color="gray.600">
-                    Колонка «Представник підрозділу» у PDF береться з ПІБ та посади представника вище.
-                  </Text>
 
-                  <FormControl>
-                    <FormLabel>Порушення</FormLabel>
-                    <Select
-                      minH={MIN_TAP_H}
-                      placeholder="Обрати зі списку (як у акті)"
-                      value=""
-                      onChange={(e) => {
-                        if (e.target.value) setAnalysisViolation(e.target.value)
-                      }}
-                      bg="white"
-                      borderColor="blackAlpha.300"
-                    >
-                      {nonconformityDescriptionOptions.map((opt) => (
-                        <option key={opt} value={opt}>
-                          {opt}
-                        </option>
-                      ))}
-                    </Select>
-                    <Textarea
-                      minH="96px"
-                      mt={2}
-                      value={analysisViolation}
-                      onChange={(e) => setAnalysisViolation(e.target.value)}
-                      placeholder="Текст порушення; синхронізується з першим рядком невідповідностей"
-                      {...FIELD_PROPS}
-                    />
-                  </FormControl>
+                  <VStack align="stretch" spacing={3}>
+                    {analysisCauseRows.map((acr, idx) => (
+                      <Card key={idx} {...INNER_CARD_PROPS}>
+                        <CardBody>
+                          <VStack align="stretch" spacing={3}>
+                            <HStack justify="space-between" align="center">
+                              <Text fontWeight="600">Рядок {idx + 1}</Text>
+                              {analysisCauseRows.length > 1 ? (
+                                <IconButton
+                                  aria-label="Видалити рядок"
+                                  minH={MIN_TAP_H}
+                                  size="sm"
+                                  variant="ghost"
+                                  icon={<span aria-hidden="true">✕</span>}
+                                  onClick={() => removeAnalysisCauseRow(idx)}
+                                />
+                              ) : null}
+                            </HStack>
 
-                  <FormControl>
-                    <FormLabel>Причина</FormLabel>
-                    <Textarea
-                      minH="80px"
-                      value={analysisReasonText}
-                      onChange={(e) => setAnalysisReasonText(e.target.value)}
-                      placeholder="Вкажіть причину вручну"
-                      {...FIELD_PROPS}
-                    />
-                  </FormControl>
+                            <FormControl>
+                              <FormLabel>Порушення</FormLabel>
+                              <Select
+                                minH={MIN_TAP_H}
+                                placeholder="Обрати зі списку (як у акті)"
+                                value=""
+                                onChange={(e) => {
+                                  if (e.target.value)
+                                    updateAnalysisCauseRow(idx, { violation: e.target.value })
+                                }}
+                                bg="white"
+                                borderColor="blackAlpha.300"
+                              >
+                                {nonconformityDescriptionOptions.map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </Select>
+                              <Textarea
+                                minH="96px"
+                                mt={2}
+                                value={acr.violation}
+                                onChange={(e) =>
+                                  updateAnalysisCauseRow(idx, { violation: e.target.value })
+                                }
+                                placeholder={
+                                  idx === 0
+                                    ? 'За замовчуванням як у першому рядку невідповідностей'
+                                    : undefined
+                                }
+                                {...FIELD_PROPS}
+                              />
+                            </FormControl>
 
-                  <FormControl>
-                    <FormLabel>Коригуюча дія</FormLabel>
-                    <Select
-                      minH={MIN_TAP_H}
-                      placeholder="Обрати зі списку (як у акті)"
-                      value=""
-                      onChange={(e) => {
-                        if (e.target.value) setAnalysisCorrective(e.target.value)
-                      }}
-                      bg="white"
-                      borderColor="blackAlpha.300"
-                    >
-                      {correctiveActionOptions.map((opt) => (
-                        <option key={opt} value={opt}>
-                          {opt}
-                        </option>
-                      ))}
-                    </Select>
-                    <Textarea
-                      minH="80px"
-                      mt={2}
-                      value={analysisCorrective}
-                      onChange={(e) => setAnalysisCorrective(e.target.value)}
-                      {...FIELD_PROPS}
-                    />
-                  </FormControl>
+                            <FormControl>
+                              <FormLabel>Причина</FormLabel>
+                              <Textarea
+                                minH="80px"
+                                value={acr.reason}
+                                onChange={(e) =>
+                                  updateAnalysisCauseRow(idx, { reason: e.target.value })
+                                }
+                                placeholder="Вкажіть причину вручну"
+                                {...FIELD_PROPS}
+                              />
+                            </FormControl>
+
+                            <FormControl>
+                              <FormLabel>Коригуюча дія</FormLabel>
+                              <Select
+                                minH={MIN_TAP_H}
+                                placeholder="Обрати зі списку (як у акті)"
+                                value=""
+                                onChange={(e) => {
+                                  if (e.target.value)
+                                    updateAnalysisCauseRow(idx, { corrective: e.target.value })
+                                }}
+                                bg="white"
+                                borderColor="blackAlpha.300"
+                              >
+                                {correctiveActionOptions.map((opt) => (
+                                  <option key={opt} value={opt}>
+                                    {opt}
+                                  </option>
+                                ))}
+                              </Select>
+                              <Textarea
+                                minH="80px"
+                                mt={2}
+                                value={acr.corrective}
+                                onChange={(e) =>
+                                  updateAnalysisCauseRow(idx, { corrective: e.target.value })
+                                }
+                                {...FIELD_PROPS}
+                              />
+                            </FormControl>
+                          </VStack>
+                        </CardBody>
+                      </Card>
+                    ))}
+
+                    <Button {...ADD_ROW_BUTTON_PROPS} onClick={addAnalysisCauseRow}>
+                      Додати рядок
+                    </Button>
+                  </VStack>
                 </VStack>
               </CardBody>
             </Card>
@@ -1201,7 +1281,7 @@ function App() {
                     <SectionHeader
                       eyebrow="05"
                       title="Звіт про закриття невідповідностей"
-                      description="Заповнюється перевіряючим: оберіть коригуючу дії та відмітку виконання (Так / Ні). Фотофіксація для звіту не додається."
+                      description="Оберіть коригуючу дію та відмітьте виконання: Так або Ні."
                     />
 
                     <VStack align="stretch" spacing={4}>
@@ -1265,7 +1345,7 @@ function App() {
                         </Box>
                       ))}
 
-                      <Button minH={MIN_TAP_H} type="button" variant="outline" onClick={addClosureRow}>
+                      <Button {...ADD_ROW_BUTTON_PROPS} onClick={addClosureRow}>
                         Додати рядок
                       </Button>
                     </VStack>
@@ -1282,14 +1362,13 @@ function App() {
                     </FormControl>
 
                     <Text fontSize="sm" color="gray.600">
-                      У PDF автоматично формується блок «Кінцеве заключення» за відмітками Так/Ні; перевіряючий —
-                      як указано вище в формі ({inspectorFullName || 'ПІБ'}).
+                      Кінцеве заключення в PDF з’явиться автоматично; перевіряючий — як у полі ПІБ еколога вище.
                     </Text>
                   </>
                 ) : (
                   <>
                     <SectionHeader
-                      eyebrow="05"
+                      eyebrow="04"
                       title="Фотофіксація"
                       description="Додайте фото порушень до матеріалів акта."
                     />

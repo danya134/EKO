@@ -269,6 +269,8 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
     - photos: кілька файлів (однакове поле photos)
     - additional_unit_representatives_json: необов’язково, JSON array
       [{\"position\": \"...\", \"full_name\": \"...\"}, ...] — додаткові представники підрозділу у блоці підписів
+    - analysis_cause_rows_json: необов’язково для звіту, JSON array
+      [{\"violation\": \"...\", \"reason\": \"...\", \"corrective\": \"...\"}, ...] — кілька рядків таблиці «Причина…»
     """
 
     parser_classes = (MultiPartParser, FormParser)
@@ -329,6 +331,26 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
         analysis_reason_text = (data.get("analysis_reason_text") or "").strip()
         analysis_violation = (data.get("analysis_violation") or "").strip()
         analysis_corrective_action = (data.get("analysis_corrective_action") or "").strip()
+
+        analysis_cause_rows_parsed: list[tuple[str, str, str]] = []
+        acr_raw = (data.get("analysis_cause_rows_json") or "").strip()
+        if acr_raw:
+            try:
+                acr_list = json.loads(acr_raw)
+            except json.JSONDecodeError as e:
+                raise ValidationError(
+                    {"analysis_cause_rows_json": "Некоректний JSON (очікується масив)"}
+                ) from e
+            if not isinstance(acr_list, list):
+                raise ValidationError({"analysis_cause_rows_json": "Очікується JSON-масив"})
+            for item in acr_list:
+                if not isinstance(item, dict):
+                    continue
+                v = str(item.get("violation") or "").strip()
+                rsn = str(item.get("reason") or "").strip()
+                corr = str(item.get("corrective") or "").strip()
+                if v or rsn or corr:
+                    analysis_cause_rows_parsed.append((v, rsn, corr))
 
         closure_comments = (data.get("closure_comments") or "").strip()
         closure_raw = (data.get("closure_rows_json") or "[]").strip()
@@ -442,6 +464,7 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
             analysis_reason_text=analysis_reason_text,
             analysis_violation=analysis_violation,
             analysis_corrective_action=analysis_corrective_action,
+            analysis_cause_rows=analysis_cause_rows_parsed if analysis_cause_rows_parsed else None,
             closure_rows=closure_rows_parsed,
             closure_comments=closure_comments,
         )
