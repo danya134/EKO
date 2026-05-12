@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   AlertIcon,
@@ -70,6 +70,28 @@ const DOC_KIND = {
   REPORT: 'report',
 }
 
+/** Дата за замовчуванням для «Діє з» (04.06.2018 — як на типовому бланку). */
+const DEFAULT_EFFECTIVE_FROM_DATE = '2018-06-04'
+
+/** Рядок для шапки PDF: Діє з: "DD" "MM" YYYYр (типографські лапки). */
+function effectiveFromLineFromIso(iso) {
+  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return ''
+  const [y, m, d] = iso.split('-')
+  return `Діє з: \u201c${d}\u201d \u201c${m}\u201d ${y}р`
+}
+
+/**
+ * Коригуюча дія за тим самим індексом у списках (як у JSON nonconformity_descriptions / corrective_actions).
+ * Якщо текст порушення не збігається з пунктом каталогу — порожньо (лишаємо ручне заповнення).
+ */
+function suggestedCorrectiveForDescription(description, descOptions, corrOptions) {
+  const d = (description || '').trim()
+  if (!d || !Array.isArray(descOptions) || !Array.isArray(corrOptions)) return ''
+  const idx = descOptions.findIndex((opt) => opt === d)
+  if (idx < 0) return ''
+  return (corrOptions[idx] || '').trim()
+}
+
 /** Лише для звіту Ф-15-02 — зберігається в corrective_actions */
 const REPORT_STAGE_OPTIONS = ['виконано', 'не виконано', 'виконано неповністю']
 
@@ -95,7 +117,7 @@ function emptyAdditionalRep() {
 }
 
 function emptyClosureRow() {
-  return { corrective_action: '', completed: '' }
+  return { corrective_action: '', completed: '', _srcDesc: '', _srcStage: '' }
 }
 
 function emptyAnalysisCauseRow() {
@@ -135,6 +157,7 @@ function App() {
   const [nonconformityDescriptionOptions, setNonconformityDescriptionOptions] = useState(NONCONFORMITY_DESCRIPTIONS_FALLBACK)
   const [correctiveActionOptions, setCorrectiveActionOptions] = useState(CORRECTIVE_ACTIONS_FALLBACK)
   const [revision, setRevision] = useState('0')
+  const [effectiveFromDate, setEffectiveFromDate] = useState(DEFAULT_EFFECTIVE_FROM_DATE)
   const [reportDate, setReportDate] = useState(isoToday())
   /** Дата акта ВЕК у підставах звіту (текст «від …»); дата звіту — окремо в колонці таблиці */
   const [actDate, setActDate] = useState(isoToday())
@@ -172,6 +195,48 @@ function App() {
   // а лише при реальній зміні філії/дільниці.
   const isFirstBranchRunRef = useRef(true)
   const isFirstSiteNameRunRef = useRef(true)
+
+  const onSelectDocKind = useCallback(
+    (nextKind) => {
+      if (nextKind === docKind) return
+      // Щоб ефекти по філії/дільниці не «перезатирали» скидання дублюючими setState.
+      isFirstBranchRunRef.current = true
+      isFirstSiteNameRunRef.current = true
+
+      setDocKind(nextKind)
+      setError('')
+      setBranch('')
+      setSiteOptions([])
+      setRevision('0')
+      setEffectiveFromDate(DEFAULT_EFFECTIVE_FROM_DATE)
+      setReportDate(isoToday())
+      setActDate(isoToday())
+      setAnalysisProposedVek('')
+      setAnalysisProposedCheck('')
+      setAnalysisActual('')
+      setAnalysisCauseRows([emptyAnalysisCauseRow()])
+      setSiteName('')
+      setInspectionForm('позапланова')
+      setInspectorFullName('')
+      setInspectorPosition('Провідний Еколог')
+      setUnitRepFullName('')
+      setUnitRepPosition('Начальник дільниці')
+      setAdditionalReps([])
+      setRows([emptyRow(1)])
+      setPhotos([])
+      setClosureRows([emptyClosureRow()])
+      setClosureComments('')
+      setAvailableResponsibles([])
+
+      lastAutoInspectorRef.current = { fullName: '', position: 'Провідний Еколог' }
+      lastAutoUnitRepRef.current = { fullName: '', position: 'Начальник дільниці' }
+      lastAutoResponsibleRef.current = ''
+      lastAutoAdditionalRepsRef.current = []
+
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    },
+    [docKind]
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -234,13 +299,21 @@ function App() {
       lastAutoInspectorRef.current = { fullName: '', position: '' }
     }
     isFirstBranchRunRef.current = false
+  }, [branch])
 
+  useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
         if (!branch.trim()) return
+        const siteTrim = (siteName || '').trim()
+        const unitKnownForBranch =
+          !siteTrim || !siteOptions.length || siteOptions.includes(siteName)
+        const unitParam = unitKnownForBranch ? siteTrim : ''
+
         const url = new URL(`${API_BASE}/api/inspector-autofill/`)
         url.searchParams.set('branch', branch)
+        if (unitParam) url.searchParams.set('unit', unitParam)
         const res = await fetch(url.toString())
         if (!res.ok) return
         const data = await res.json()
@@ -259,7 +332,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [branch])
+  }, [branch, siteName, siteOptions])
 
   useEffect(() => {
     if (!isFirstSiteNameRunRef.current) {
@@ -423,13 +496,79 @@ function App() {
 
   useEffect(() => {
     if (docKind !== DOC_KIND.REPORT) return
-    const d = (rows[0]?.description || '').trim()
     setAnalysisCauseRows((prev) => {
-      const base = prev.length ? [...prev] : [emptyAnalysisCauseRow()]
-      base[0] = { ...base[0], violation: d }
-      return base
+      const n = rows.length
+      const next = []
+      for (let i = 0; i < n; i++) {
+        const descRaw = rows[i]?.description || ''
+        const desc = descRaw.trim()
+        const prevRow = prev[i]
+        const prevV = (prevRow?.violation || '').trim()
+        const sug = suggestedCorrectiveForDescription(
+          descRaw,
+          nonconformityDescriptionOptions,
+          correctiveActionOptions
+        )
+        const reason = prevRow?.reason || ''
+        let corrective = prevRow?.corrective || ''
+        if (desc !== prevV) {
+          corrective = sug || corrective
+        } else if (sug && !corrective.trim()) {
+          corrective = sug
+        }
+        next.push({
+          violation: descRaw,
+          reason,
+          corrective,
+        })
+      }
+      return next
     })
-  }, [docKind, rows[0]?.description])
+  }, [docKind, rows, nonconformityDescriptionOptions, correctiveActionOptions])
+
+  useEffect(() => {
+    if (docKind !== DOC_KIND.REPORT) return
+    setClosureRows((prev) => {
+      const n = rows.length
+      const next = []
+      for (let i = 0; i < n; i++) {
+        const src = rows[i]
+        const descRaw = src?.description || ''
+        const desc = descRaw.trim()
+        const stage = (src?.corrective_actions || '').trim()
+        const sug = suggestedCorrectiveForDescription(
+          descRaw,
+          nonconformityDescriptionOptions,
+          correctiveActionOptions
+        )
+        const prevRow = prev[i]
+        const prevSrcDesc = (prevRow?._srcDesc || '').trim()
+        const prevSrcStage = (prevRow?._srcStage || '').trim()
+
+        let corrective_action = prevRow?.corrective_action || ''
+        let completed = prevRow?.completed || ''
+
+        if (desc !== prevSrcDesc) {
+          corrective_action = sug || corrective_action
+        } else if (sug && !corrective_action.trim()) {
+          corrective_action = sug
+        }
+
+        if (stage !== prevSrcStage) {
+          if (stage === 'виконано') completed = 'yes'
+          else if (REPORT_STAGE_OPTIONS.includes(stage)) completed = 'no'
+        }
+
+        next.push({
+          corrective_action,
+          completed,
+          _srcDesc: descRaw,
+          _srcStage: stage,
+        })
+      }
+      return next
+    })
+  }, [docKind, rows, nonconformityDescriptionOptions, correctiveActionOptions])
 
   const canSubmit = useMemo(() => {
     return siteName.trim() && inspectionForm.trim() && inspectorFullName.trim() && unitRepFullName.trim()
@@ -487,30 +626,8 @@ function App() {
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
-  const addClosureRow = () => {
-    setClosureRows((prev) => [...prev, emptyClosureRow()])
-  }
-
-  const removeClosureRow = (idx) => {
-    setClosureRows((prev) => {
-      const next = prev.filter((_, i) => i !== idx)
-      return next.length ? next : [emptyClosureRow()]
-    })
-  }
-
   const updateClosureRow = (idx, patch) => {
     setClosureRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
-  }
-
-  const addAnalysisCauseRow = () => {
-    setAnalysisCauseRows((prev) => [...prev, emptyAnalysisCauseRow()])
-  }
-
-  const removeAnalysisCauseRow = (idx) => {
-    setAnalysisCauseRows((prev) => {
-      const next = prev.filter((_, i) => i !== idx)
-      return next.length ? next : [emptyAnalysisCauseRow()]
-    })
   }
 
   const updateAnalysisCauseRow = (idx, patch) => {
@@ -536,6 +653,7 @@ function App() {
       fd.append('doc_kind', docKind)
       fd.append('branch', branch)
       fd.append('revision', revision)
+      fd.append('effective_from', effectiveFromLineFromIso(effectiveFromDate))
       fd.append('report_date', reportDate)
       fd.append('act_date', docKind === DOC_KIND.REPORT ? actDate : reportDate)
       fd.append('site_name', siteName)
@@ -655,7 +773,7 @@ function App() {
                 color={docKind === DOC_KIND.ACT ? '#1f2933' : 'white'}
                 _hover={{ bg: docKind === DOC_KIND.ACT ? 'white' : 'whiteAlpha.300' }}
                 _active={{ bg: 'whiteAlpha.400' }}
-                onClick={() => setDocKind(DOC_KIND.ACT)}
+                onClick={() => onSelectDocKind(DOC_KIND.ACT)}
               >
                 Акт проведення перевірки
               </Button>
@@ -670,7 +788,7 @@ function App() {
                 color={docKind === DOC_KIND.REPORT ? '#1f2933' : 'white'}
                 _hover={{ bg: docKind === DOC_KIND.REPORT ? 'white' : 'whiteAlpha.300' }}
                 _active={{ bg: 'whiteAlpha.400' }}
-                onClick={() => setDocKind(DOC_KIND.REPORT)}
+                onClick={() => onSelectDocKind(DOC_KIND.REPORT)}
               >
                 Звіт з перевірки
               </Button>
@@ -726,6 +844,22 @@ function App() {
                     <FormLabel>Редакція</FormLabel>
                     <Input minH={MIN_TAP_H} value={revision} onChange={(e) => setRevision(e.target.value)} {...FIELD_PROPS} />
                   </FormControl>
+                  <FormControl>
+                    <FormLabel>Діє з</FormLabel>
+                    <InputGroup>
+                      <InputLeftElement h={MIN_TAP_H} pointerEvents="none" color="#2f4f6f">
+                        📅
+                      </InputLeftElement>
+                      <Input
+                        minH={MIN_TAP_H}
+                        type="date"
+                        value={effectiveFromDate}
+                        onChange={(e) => setEffectiveFromDate(e.target.value)}
+                        pl={10}
+                        {...FIELD_PROPS}
+                      />
+                    </InputGroup>
+                  </FormControl>
                   {docKind === DOC_KIND.REPORT ? (
                     <FormControl>
                       <FormLabel>Дата складання акта</FormLabel>
@@ -773,8 +907,8 @@ function App() {
                   title="Основні дані"
                   description={
                     docKind === DOC_KIND.REPORT
-                      ? 'Підрозділ і ПІБ можуть підставитися зі списку; за потреби змініть вручну.'
-                      : 'Підрозділ, формат перевірки та відповідальні особи.'
+                      ? 'Підрозділ, ПІБ і посада перевіряючого підставляються з JSON за філією та дільницею (як у акті); можна змінити вручну.'
+                      : 'Підрозділ, формат перевірки та відповідальні особи. Перевіряючий — з JSON за філією та дільницею; можна змінити вручну.'
                   }
                 />
 
@@ -818,7 +952,7 @@ function App() {
                 ) : null}
 
                 <FormControl isRequired>
-                  <FormLabel>ПІБ еколога</FormLabel>
+                  <FormLabel>ПІБ перевіряючого</FormLabel>
                   <Input
                     minH={MIN_TAP_H}
                     placeholder="Введіть ПІБ"
@@ -829,7 +963,7 @@ function App() {
                 </FormControl>
 
                 <FormControl>
-                  <FormLabel>Посада еколога</FormLabel>
+                  <FormLabel>Посада перевіряючого</FormLabel>
                   <Input
                     minH={MIN_TAP_H}
                     placeholder="Введіть посаду"
@@ -926,7 +1060,7 @@ function App() {
                   title={docKind === DOC_KIND.REPORT ? 'Спостережувана невідповідність' : 'Невідповідності'}
                   description={
                     docKind === DOC_KIND.REPORT
-                      ? 'Опис невідповідності, стадія та відсоток виконання.'
+                      ? 'Опис невідповідності, стадія та відсоток виконання. Рядки закриття (блок 05) підставляються автоматично за цими даними.'
                       : undefined
                   }
                 />
@@ -958,7 +1092,18 @@ function App() {
                               placeholder="Обрати зі списку (або введіть вручну нижче)"
                               value=""
                               onChange={(e) => {
-                                if (e.target.value) updateRow(idx, { description: e.target.value })
+                                if (!e.target.value) return
+                                const desc = e.target.value
+                                const patch = { description: desc }
+                                if (docKind === DOC_KIND.ACT) {
+                                  const sug = suggestedCorrectiveForDescription(
+                                    desc,
+                                    nonconformityDescriptionOptions,
+                                    correctiveActionOptions
+                                  )
+                                  if (sug) patch.corrective_actions = sug
+                                }
+                                updateRow(idx, patch)
                               }}
                               bg="white"
                               borderColor="blackAlpha.300"
@@ -1111,7 +1256,11 @@ function App() {
             <Card variant="outline" {...CARD_PROPS}>
               <CardBody>
                 <VStack align="stretch" spacing={4}>
-                  <SectionHeader eyebrow="04" title="Аналіз причин невідповідностей" />
+                  <SectionHeader
+                    eyebrow="04"
+                    title="Аналіз причин невідповідностей"
+                    description="Рядки відповідають невідповідностям у блоці 03 (по порядку). Порушення підставляються автоматично; коригуюча дія — з каталогу за тим самим пунктом, можна змінити вручну або зі списку."
+                  />
                   <HStack spacing={3} align="start" flexWrap="wrap">
                     <FormControl>
                       <FormLabel>Запропонована дата: під час ВЕК</FormLabel>
@@ -1165,54 +1314,24 @@ function App() {
 
                   <VStack align="stretch" spacing={3}>
                     {analysisCauseRows.map((acr, idx) => (
-                      <Card key={idx} {...INNER_CARD_PROPS}>
+                      <Card key={rows[idx]?.order_number ?? idx} {...INNER_CARD_PROPS}>
                         <CardBody>
                           <VStack align="stretch" spacing={3}>
                             <HStack justify="space-between" align="center">
-                              <Text fontWeight="600">Рядок {idx + 1}</Text>
-                              {analysisCauseRows.length > 1 ? (
-                                <IconButton
-                                  aria-label="Видалити рядок"
-                                  minH={MIN_TAP_H}
-                                  size="sm"
-                                  variant="ghost"
-                                  icon={<span aria-hidden="true">✕</span>}
-                                  onClick={() => removeAnalysisCauseRow(idx)}
-                                />
-                              ) : null}
+                              <Text fontWeight="600">Рядок {idx + 1} (відповідає № {idx + 1} у блоці 03)</Text>
                             </HStack>
 
                             <FormControl>
                               <FormLabel>Порушення</FormLabel>
-                              <Select
-                                minH={MIN_TAP_H}
-                                placeholder="Обрати зі списку (як у акті)"
-                                value=""
-                                onChange={(e) => {
-                                  if (e.target.value)
-                                    updateAnalysisCauseRow(idx, { violation: e.target.value })
-                                }}
-                                bg="white"
-                                borderColor="blackAlpha.300"
-                              >
-                                {nonconformityDescriptionOptions.map((opt) => (
-                                  <option key={opt} value={opt}>
-                                    {opt}
-                                  </option>
-                                ))}
-                              </Select>
+                              <Text fontSize="xs" color="gray.600" mb={1}>
+                                Редагується у блоці «Спостережувана невідповідність»; тут лише для перегляду.
+                              </Text>
                               <Textarea
                                 minH="96px"
-                                mt={2}
+                                isReadOnly
+                                cursor="default"
                                 value={acr.violation}
-                                onChange={(e) =>
-                                  updateAnalysisCauseRow(idx, { violation: e.target.value })
-                                }
-                                placeholder={
-                                  idx === 0
-                                    ? 'За замовчуванням як у першому рядку невідповідностей'
-                                    : undefined
-                                }
+                                bg="gray.50"
                                 {...FIELD_PROPS}
                               />
                             </FormControl>
@@ -1263,10 +1382,6 @@ function App() {
                         </CardBody>
                       </Card>
                     ))}
-
-                    <Button {...ADD_ROW_BUTTON_PROPS} onClick={addAnalysisCauseRow}>
-                      Додати рядок
-                    </Button>
                   </VStack>
                 </VStack>
               </CardBody>
@@ -1281,13 +1396,13 @@ function App() {
                     <SectionHeader
                       eyebrow="05"
                       title="Звіт про закриття невідповідностей"
-                      description="Оберіть коригуючу дію та відмітьте виконання: Так або Ні."
+                      description="Рядки відповідають блоці 03: коригуюча дія з каталогу за порушенням; «Виконано» — Так лише якщо стадія «виконано», для «не виконано» / «виконано неповністю» — Ні. Можна змінити вручну."
                     />
 
                     <VStack align="stretch" spacing={4}>
                       {closureRows.map((r, idx) => (
                         <Box
-                          key={idx}
+                          key={rows[idx]?.order_number ?? idx}
                           borderWidth="1px"
                           borderColor="blackAlpha.200"
                           borderRadius="md"
@@ -1299,11 +1414,12 @@ function App() {
                               <FormLabel>Коригуюча дія</FormLabel>
                               <Select
                                 minH={MIN_TAP_H}
-                                placeholder="Оберіть зі списку"
-                                value={r.corrective_action}
-                                onChange={(e) =>
-                                  updateClosureRow(idx, { corrective_action: e.target.value })
-                                }
+                                placeholder="Оберіть зі списку (або введіть текст нижче)"
+                                value=""
+                                onChange={(e) => {
+                                  if (e.target.value)
+                                    updateClosureRow(idx, { corrective_action: e.target.value })
+                                }}
                                 bg="white"
                                 borderColor="blackAlpha.300"
                               >
@@ -1314,6 +1430,16 @@ function App() {
                                   </option>
                                 ))}
                               </Select>
+                              <Textarea
+                                minH="80px"
+                                mt={2}
+                                value={r.corrective_action}
+                                onChange={(e) =>
+                                  updateClosureRow(idx, { corrective_action: e.target.value })
+                                }
+                                placeholder="Текст коригуючої дії (підставляється з блоці 03 за каталогом)"
+                                {...FIELD_PROPS}
+                              />
                             </FormControl>
 
                             <FormControl>
@@ -1328,26 +1454,9 @@ function App() {
                                 </HStack>
                               </RadioGroup>
                             </FormControl>
-
-                            {closureRows.length > 1 ? (
-                              <Button
-                                minH={MIN_TAP_H}
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                alignSelf="flex-start"
-                                onClick={() => removeClosureRow(idx)}
-                              >
-                                Видалити рядок
-                              </Button>
-                            ) : null}
                           </VStack>
                         </Box>
                       ))}
-
-                      <Button {...ADD_ROW_BUTTON_PROPS} onClick={addClosureRow}>
-                        Додати рядок
-                      </Button>
                     </VStack>
 
                     <FormControl>
@@ -1362,7 +1471,7 @@ function App() {
                     </FormControl>
 
                     <Text fontSize="sm" color="gray.600">
-                      Кінцеве заключення в PDF з’явиться автоматично; перевіряючий — як у полі ПІБ еколога вище.
+                      Кінцеве заключення в PDF з’явиться автоматично; перевіряючий — як у полі ПІБ перевіряючого вище.
                     </Text>
                   </>
                 ) : (

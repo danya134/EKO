@@ -132,23 +132,65 @@ def _load_json(path: Path, *, default):
         return default
 
 
+def _inspector_pair_from_dict(d: dict) -> dict[str, str]:
+    return {
+        "position": str(d.get("position") or "").strip(),
+        "full_name": str(d.get("full_name") or "").strip(),
+    }
+
+
+def _inspector_unit_key(d: dict) -> str:
+    return (str(d.get("дільниця") or d.get("unit") or "")).strip()
+
+
+def _normalize_inspector_branch_value(raw: object) -> list[dict]:
+    if isinstance(raw, list):
+        return [x for x in raw if isinstance(x, dict)]
+    if isinstance(raw, dict):
+        return [raw]
+    return []
+
+
+def _resolve_inspector_autofill(raw: object, *, unit: str) -> dict[str, str]:
+    """
+    JSON для філії: один об'єкт {position, full_name, дільниця?} або масив таких об'єктів.
+    - Якщо передано unit (дільниця) — беремо запис, де «дільниця»/unit точно збігається.
+    - Інакше або якщо немає збігу — запис з порожнім «дільниця»/unit (типово для всіх дільниць).
+    - Якщо такого немає — перший запис у списку.
+    """
+    entries = _normalize_inspector_branch_value(raw)
+    if not entries:
+        return {"position": "", "full_name": ""}
+    unit_q = (unit or "").strip()
+    if unit_q:
+        for e in entries:
+            uk = _inspector_unit_key(e)
+            if uk and uk == unit_q:
+                return _inspector_pair_from_dict(e)
+    for e in entries:
+        if not _inspector_unit_key(e):
+            return _inspector_pair_from_dict(e)
+    return _inspector_pair_from_dict(entries[0])
+
+
 class InspectorAutofillView(APIView):
+    """
+    GET ?branch=...&unit=... (unit необов'язково — назва дільниці як у списку підрозділів).
+
+    inspector_autofill.json: для ключа філії значення — об'єкт або масив об'єктів з полями
+    position, full_name та необов'язково «дільниця» або unit (порожньо = для всіх дільниць філії).
+    """
+
     def get(self, request, *args, **kwargs):
         branch = (request.query_params.get("branch") or "").strip()
+        unit = (request.query_params.get("unit") or "").strip()
         path = Path(__file__).resolve().parent / "inspector_autofill.json"
         data = _load_json(path, default={})
         if not isinstance(data, dict):
             data = {}
-        item = data.get(branch, {}) if branch else {}
-        if not isinstance(item, dict):
-            item = {}
-        return Response(
-            {
-                "position": str(item.get("position") or "").strip(),
-                "full_name": str(item.get("full_name") or "").strip(),
-            },
-            status=status.HTTP_200_OK,
-        )
+        raw = data.get(branch) if branch else None
+        picked = _resolve_inspector_autofill(raw, unit=unit)
+        return Response(picked, status=status.HTTP_200_OK)
 
 
 class UnitRepresentativeAutofillView(APIView):
@@ -220,6 +262,8 @@ class EnvironmentalReportPdfView(APIView):
 
         report: EnvironmentalReport = serializer.save()
 
+        effective_from = str(request.data.get("effective_from") or "").strip()
+
         nonconf_rows = [
             NonconformityRow(
                 order_number=r.order_number,
@@ -239,6 +283,7 @@ class EnvironmentalReportPdfView(APIView):
         pdf_bytes = build_environmental_report_pdf(
             branch=report.branch,
             revision=report.revision,
+            effective_from=effective_from,
             report_date=report.report_date,
             site_name=report.site_name,
             inspection_form=report.inspection_form,
@@ -263,6 +308,7 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
 
     Очікує поля:
     - branch, revision, report_date (YYYY-MM-DD)
+    - effective_from: необов'язково — рядок для шапки («Діє з: …»); якщо порожньо — підставляється значення за замовчуванням
     - act_date (YYYY-MM-DD), необов’язково: дата складання акта для тексту підстав ВЕК; якщо порожньо — дорівнює report_date
     - site_name, inspector_full_name, unit_representative_full_name
     - nonconformities_json: JSON array [{order_number, description, corrective_actions, responsible, due_date}]
@@ -286,6 +332,7 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
 
         branch = req_str("branch")
         revision = (data.get("revision") or "").strip()
+        effective_from = (data.get("effective_from") or "").strip()
         site_name = req_str("site_name")
         doc_kind = (data.get("doc_kind") or "").strip().lower() or "act"
         if doc_kind not in {"act", "report"}:
@@ -447,6 +494,7 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
             doc_kind=doc_kind,
             branch=report.branch,
             revision=report.revision,
+            effective_from=effective_from,
             report_date=report.report_date,
             site_name=report.site_name,
             inspection_form=report.inspection_form,

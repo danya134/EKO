@@ -35,6 +35,8 @@ FONT_ITALIC = "TimesNewRoman-Italic"
 FONT_BOLD_ITALIC = "TimesNewRoman-BoldItalic"
 
 HEADER_H = 40 * mm
+# Текст у шапці PDF (ліва нижня комірка), якщо з форми не передано своє значення.
+_DEFAULT_EFFECTIVE_FROM = "Діє з: \u201c04\u201d \u201c06\u201d 2018р"
 TABLE_SIDE_GAP = 2 * mm
 # Під таблицею: поле ПІБ — відступ від правого краю текстового поля (як на бланку).
 SIG_PIB_RIGHT_MARGIN = 10 * mm
@@ -335,6 +337,7 @@ def _draw_page_header(
     doc_kind: str = "act",
     branch: str,
     revision: str,
+    effective_from: str = "",
     report_date: date,
     site_name: str,
     page_num: int,
@@ -465,8 +468,9 @@ def _draw_page_header(
     )
     right_top = Paragraph("", ParagraphStyle("_hdr_empty", fontName=FONT_NAME, fontSize=12, leading=14))
 
+    effective_line = (effective_from or "").strip() or _DEFAULT_EFFECTIVE_FROM
     left_bottom = _fit_paragraph(
-        "Діє з: “04” “06” 2018р",
+        html.escape(effective_line, quote=False),
         base_size=12,
         min_size=9,
         width=col1 - 2 * pad_x,
@@ -606,6 +610,7 @@ def build_environmental_report_pdf(
     doc_kind: str = "act",
     branch: str,
     revision: str,
+    effective_from: str = "",
     report_date: date,
     site_name: str,
     inspection_form: str,
@@ -1335,6 +1340,7 @@ def build_environmental_report_pdf(
     header_kwargs = dict(
         branch=branch,
         revision=revision,
+        effective_from=effective_from,
         report_date=report_date,
         site_name=site_name,
         doc_kind=kind,
