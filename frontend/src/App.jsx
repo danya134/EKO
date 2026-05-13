@@ -1505,10 +1505,6 @@ function App() {
                         {...FIELD_PROPS}
                       />
                     </FormControl>
-
-                    <Text fontSize="sm" color="gray.600">
-                      Кінцеве заключення в PDF з’явиться автоматично; перевіряючий — як у полі ПІБ перевіряючого вище.
-                    </Text>
                   </>
                 ) : (
                   <>
@@ -1568,10 +1564,6 @@ function App() {
           >
             Сформувати PDF
           </Button>
-
-          <Text fontSize="xs" color="gray.500" textAlign="center">
-            Запит відправляється на <Text as="span" fontFamily="mono">{API_BASE}/api/generate-pdf/</Text>
-          </Text>
         </VStack>
       </Container>
     </Box>
