@@ -494,8 +494,22 @@ function App() {
     }
   }, [branch])
 
-  useEffect(() => {
-    if (docKind !== DOC_KIND.REPORT) return
+  const [analysisSyncDeps, setAnalysisSyncDeps] = useState({
+    rows: null,
+    desc: null,
+    act: null,
+  })
+  if (
+    docKind === DOC_KIND.REPORT &&
+    (analysisSyncDeps.rows !== rows ||
+      analysisSyncDeps.desc !== nonconformityDescriptionOptions ||
+      analysisSyncDeps.act !== correctiveActionOptions)
+  ) {
+    setAnalysisSyncDeps({
+      rows,
+      desc: nonconformityDescriptionOptions,
+      act: correctiveActionOptions,
+    })
     setAnalysisCauseRows((prev) => {
       const n = rows.length
       const next = []
@@ -524,10 +538,24 @@ function App() {
       }
       return next
     })
-  }, [docKind, rows, nonconformityDescriptionOptions, correctiveActionOptions])
+  }
 
-  useEffect(() => {
-    if (docKind !== DOC_KIND.REPORT) return
+  const [closureSyncDeps, setClosureSyncDeps] = useState({
+    rows: null,
+    desc: null,
+    act: null,
+  })
+  if (
+    docKind === DOC_KIND.REPORT &&
+    (closureSyncDeps.rows !== rows ||
+      closureSyncDeps.desc !== nonconformityDescriptionOptions ||
+      closureSyncDeps.act !== correctiveActionOptions)
+  ) {
+    setClosureSyncDeps({
+      rows,
+      desc: nonconformityDescriptionOptions,
+      act: correctiveActionOptions,
+    })
     setClosureRows((prev) => {
       const n = rows.length
       const next = []
@@ -568,7 +596,7 @@ function App() {
       }
       return next
     })
-  }, [docKind, rows, nonconformityDescriptionOptions, correctiveActionOptions])
+  }
 
   const canSubmit = useMemo(() => {
     return siteName.trim() && inspectionForm.trim() && inspectorFullName.trim() && unitRepFullName.trim()
@@ -755,20 +783,25 @@ function App() {
             <HStack
               justify="center"
               mt={0}
-              spacing={3}
+              spacing={{ base: 1, md: 3 }}
               bg="whiteAlpha.200"
               p="6px"
               borderRadius="full"
               w="full"
-              flexWrap="wrap"
+              flexWrap="nowrap"
             >
               <Button
                 type="button"
+                flex="1"
+                minW="0"
                 minH="56px"
-                px={{ base: 6, md: 10 }}
+                px={{ base: 2, md: 10 }}
                 borderRadius="full"
                 variant="ghost"
-                fontSize={{ base: 'md', md: 'lg' }}
+                fontSize={{ base: 'xs', sm: 'sm', md: 'lg' }}
+                whiteSpace="normal"
+                lineHeight="1.2"
+                textAlign="center"
                 bg={docKind === DOC_KIND.ACT ? 'white' : 'transparent'}
                 color={docKind === DOC_KIND.ACT ? '#1f2933' : 'white'}
                 _hover={{ bg: docKind === DOC_KIND.ACT ? 'white' : 'whiteAlpha.300' }}
@@ -779,11 +812,16 @@ function App() {
               </Button>
               <Button
                 type="button"
+                flex="1"
+                minW="0"
                 minH="56px"
-                px={{ base: 6, md: 10 }}
+                px={{ base: 2, md: 10 }}
                 borderRadius="full"
                 variant="ghost"
-                fontSize={{ base: 'md', md: 'lg' }}
+                fontSize={{ base: 'xs', sm: 'sm', md: 'lg' }}
+                whiteSpace="normal"
+                lineHeight="1.2"
+                textAlign="center"
                 bg={docKind === DOC_KIND.REPORT ? 'white' : 'transparent'}
                 color={docKind === DOC_KIND.REPORT ? '#1f2933' : 'white'}
                 _hover={{ bg: docKind === DOC_KIND.REPORT ? 'white' : 'whiteAlpha.300' }}
@@ -907,8 +945,8 @@ function App() {
                   title="Основні дані"
                   description={
                     docKind === DOC_KIND.REPORT
-                      ? 'Підрозділ, ПІБ і посада перевіряючого підставляються з JSON за філією та дільницею (як у акті); можна змінити вручну.'
-                      : 'Підрозділ, формат перевірки та відповідальні особи. Перевіряючий — з JSON за філією та дільницею; можна змінити вручну.'
+                      ? undefined
+                      : 'Підрозділ, формат перевірки та відповідальні особи.'
                   }
                 />
 
@@ -1060,7 +1098,7 @@ function App() {
                   title={docKind === DOC_KIND.REPORT ? 'Спостережувана невідповідність' : 'Невідповідності'}
                   description={
                     docKind === DOC_KIND.REPORT
-                      ? 'Опис невідповідності, стадія та відсоток виконання. Рядки закриття (блок 05) підставляються автоматично за цими даними.'
+                      ? 'Опис невідповідності, стадія та відсоток виконання.'
                       : undefined
                   }
                 />
@@ -1259,7 +1297,6 @@ function App() {
                   <SectionHeader
                     eyebrow="04"
                     title="Аналіз причин невідповідностей"
-                    description="Рядки відповідають невідповідностям у блоці 03 (по порядку). Порушення підставляються автоматично; коригуюча дія — з каталогу за тим самим пунктом, можна змінити вручну або зі списку."
                   />
                   <HStack spacing={3} align="start" flexWrap="wrap">
                     <FormControl>
@@ -1396,7 +1433,6 @@ function App() {
                     <SectionHeader
                       eyebrow="05"
                       title="Звіт про закриття невідповідностей"
-                      description="Рядки відповідають блоці 03: коригуюча дія з каталогу за порушенням; «Виконано» — Так лише якщо стадія «виконано», для «не виконано» / «виконано неповністю» — Ні. Можна змінити вручну."
                     />
 
                     <VStack align="stretch" spacing={4}>
