@@ -4,5 +4,5 @@ django-cors-headers==4.9.0
 whitenoise==6.12.0
 reportlab==4.5.0
 pillow==12.1.1
-pillow-heif==0.18.0
+pillow-heif==0.18.0; python_version < "3.13"
 gunicorn==23.0.0
