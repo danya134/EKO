@@ -27,6 +27,39 @@ import {
 
 const MIN_TAP_H = '44px'
 const API_BASE = import.meta.env.VITE_API_BASE_URL || `http://${window.location.hostname}:8000`
+
+// Витягує осмислений текст помилки з відповіді сервера, незалежно від формату:
+// - DRF ValidationError -> JSON { field: ["msg", ...] }
+// - Django DEBUG -> HTML-сторінка (беремо <title>)
+// - Інше -> перші ~500 символів тексту або HTTP-код.
+async function extractServerErrorMessage(res, contentType) {
+  try {
+    if (contentType.includes('application/json')) {
+      const data = await res.json()
+      if (data && typeof data === 'object') {
+        const parts = []
+        for (const [key, val] of Object.entries(data)) {
+          const text = Array.isArray(val) ? val.join('; ') : String(val)
+          parts.push(key === 'detail' || key === 'non_field_errors' ? text : `${key}: ${text}`)
+        }
+        if (parts.length) return parts.join('\n')
+      }
+    }
+    const text = await res.text()
+    if (contentType.includes('text/html')) {
+      const titleMatch = text.match(/<title[^>]*>([^<]+)<\/title>/i)
+      if (titleMatch && titleMatch[1]) {
+        return `Сервер повернув помилку: ${titleMatch[1].trim()}`
+      }
+    }
+    const trimmed = (text || '').trim()
+    if (trimmed) return trimmed.slice(0, 500)
+  } catch {
+    // ignore — провалимось у дефолт нижче
+  }
+  return `HTTP ${res.status}`
+}
+
 const CARD_PROPS = {
   bg: 'white',
   borderColor: 'blackAlpha.200',
@@ -756,9 +789,15 @@ function App() {
         body: fd,
       })
 
+      const contentType = (res.headers.get('content-type') || '').toLowerCase()
+
       if (!res.ok) {
-        const txt = await res.text()
-        throw new Error(txt || `HTTP ${res.status}`)
+        throw new Error(await extractServerErrorMessage(res, contentType))
+      }
+
+      if (!contentType.includes('application/pdf')) {
+        // Бек відповів 200, але це не PDF — найімовірніше HTML-сторінка помилки.
+        throw new Error(await extractServerErrorMessage(res, contentType))
       }
 
       const blob = await res.blob()

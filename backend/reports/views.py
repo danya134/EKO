@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 from datetime import date
 
+from django.core.files.uploadedfile import InMemoryUploadedFile
 from django.http import HttpResponse
+from PIL import Image as PILImage, ImageOps, UnidentifiedImageError
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -15,6 +18,77 @@ from .models import EnvironmentalNonconformity, EnvironmentalPhoto
 from .models import EnvironmentalReport
 from .pdf import NonconformityRow, PhotoItem, build_environmental_report_pdf
 from .serializers import EnvironmentalReportCreateSerializer
+
+
+# Максимальна сторона після нормалізації — щоб PDF не роздувався, а мобільний
+# інтернет не падав на 12-мегапіксельних кадрах.
+_PHOTO_MAX_SIDE = 2000
+_PHOTO_JPEG_QUALITY = 85
+
+
+def _normalize_uploaded_photo(uploaded_file, *, index: int):
+    """
+    Пропускаємо фото з телефона через Pillow:
+      - відкриваємо (HEIC підхоплюється через pillow-heif, зареєстрований у settings),
+      - виправляємо орієнтацію за EXIF (інакше iPhone-портрет лягає в PDF боком),
+      - конвертуємо у RGB JPEG (універсальний формат для ReportLab),
+      - зменшуємо до розумного розміру.
+    Повертаємо новий InMemoryUploadedFile з розширенням .jpg.
+    Якщо файл нечитабельний — піднімаємо ValidationError зі зрозумілим текстом.
+    """
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+
+    original_name = getattr(uploaded_file, "name", "") or f"photo_{index}"
+
+    try:
+        with PILImage.open(uploaded_file) as img:
+            img = ImageOps.exif_transpose(img)
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            elif img.mode == "L":
+                img = img.convert("RGB")
+
+            w, h = img.size
+            max_side = max(w, h)
+            if max_side > _PHOTO_MAX_SIDE:
+                scale = _PHOTO_MAX_SIDE / float(max_side)
+                img = img.resize(
+                    (int(w * scale), int(h * scale)),
+                    PILImage.LANCZOS,
+                )
+
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=_PHOTO_JPEG_QUALITY, optimize=True)
+            buffer.seek(0)
+    except UnidentifiedImageError as e:
+        raise ValidationError(
+            {
+                "photos": (
+                    f"Не вдалося прочитати фото №{index} «{original_name}». "
+                    "Формат не підтримується (надішліть JPEG/PNG або переключіть камеру "
+                    "iPhone у режим «Найсумісніший»)."
+                )
+            }
+        ) from e
+    except Exception as e:
+        raise ValidationError(
+            {"photos": f"Помилка обробки фото №{index} «{original_name}»: {e}"}
+        ) from e
+
+    base_name = Path(original_name).stem or f"photo_{index}"
+    new_name = f"{base_name}.jpg"
+
+    return InMemoryUploadedFile(
+        file=buffer,
+        field_name="photos",
+        name=new_name,
+        content_type="image/jpeg",
+        size=buffer.getbuffer().nbytes,
+        charset=None,
+    )
 
 
 def _parse_additional_unit_representatives_json(raw: str) -> list[dict[str, str]]:
@@ -481,11 +555,12 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
         files = request.FILES.getlist("photos")
         if doc_kind != "report":
             for i, f in enumerate(files, start=1):
+                normalized = _normalize_uploaded_photo(f, index=i)
                 EnvironmentalPhoto.objects.create(
                     report=report,
                     caption=getattr(f, "name", "") or f"Фото {i}",
                     order_number=i,
-                    image=f,
+                    image=normalized,
                 )
 
         photo_items = [PhotoItem(caption=p.caption, image_path=p.image.path) for p in report.photos.all()]

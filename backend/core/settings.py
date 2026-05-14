@@ -13,6 +13,16 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 import os
 from pathlib import Path
 
+# Реєструємо підтримку HEIC/HEIF у Pillow (фото з iPhone за замовчуванням).
+# Без цього ReportLab/ImageField падають з UnidentifiedImageError.
+try:
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+except Exception:
+    # Якщо пакет відсутній у середовищі — не валимо запуск, просто без HEIC.
+    pass
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
