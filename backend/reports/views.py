@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import tempfile
 from pathlib import Path
 from datetime import date
 
@@ -20,10 +22,10 @@ from .pdf import NonconformityRow, PhotoItem, build_environmental_report_pdf
 from .serializers import EnvironmentalReportCreateSerializer
 
 
-# Максимальна сторона після нормалізації — щоб PDF не роздувався, а мобільний
-# інтернет не падав на 12-мегапіксельних кадрах.
-_PHOTO_MAX_SIDE = 2000
-_PHOTO_JPEG_QUALITY = 85
+# Для PDF на A4 достатньо ~1200px; менший розмір = швидша генерація на Render.
+_PHOTO_MAX_SIDE = 1200
+_PHOTO_JPEG_QUALITY = 78
+_PHOTO_MAX_COUNT = 20
 
 
 def _normalize_uploaded_photo(uploaded_file, *, index: int):
@@ -89,6 +91,39 @@ def _normalize_uploaded_photo(uploaded_file, *, index: int):
         size=buffer.getbuffer().nbytes,
         charset=None,
     )
+
+
+def _photo_items_from_uploads(files) -> tuple[list[PhotoItem], list[str]]:
+    """
+    Нормалізує фото в тимчасові файли для PDF без запису в БД/диск media/.
+    Повертає (PhotoItem list, шляхи для видалення після збірки PDF).
+    """
+    items: list[PhotoItem] = []
+    temp_paths: list[str] = []
+    for i, uploaded in enumerate(files, start=1):
+        normalized = _normalize_uploaded_photo(uploaded, index=i)
+        normalized.seek(0)
+        tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+        try:
+            tmp.write(normalized.read())
+            tmp.flush()
+            tmp.close()
+            temp_paths.append(tmp.name)
+            items.append(
+                PhotoItem(
+                    caption=getattr(uploaded, "name", "") or f"Фото {i}",
+                    image_path=tmp.name,
+                )
+            )
+        except Exception:
+            tmp.close()
+            for path in temp_paths:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            raise
+    return items, temp_paths
 
 
 def _parse_additional_unit_representatives_json(raw: str) -> list[dict[str, str]]:
@@ -616,44 +651,54 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
             )
 
         files = request.FILES.getlist("photos")
-        if doc_kind != "report":
-            for i, f in enumerate(files, start=1):
-                normalized = _normalize_uploaded_photo(f, index=i)
-                EnvironmentalPhoto.objects.create(
-                    report=report,
-                    caption=getattr(f, "name", "") or f"Фото {i}",
-                    order_number=i,
-                    image=normalized,
-                )
+        if doc_kind != "report" and len(files) > _PHOTO_MAX_COUNT:
+            raise ValidationError(
+                {
+                    "photos": (
+                        f"Занадто багато фото ({len(files)}). "
+                        f"Максимум {_PHOTO_MAX_COUNT} за один акт."
+                    )
+                }
+            )
 
-        photo_items = [PhotoItem(caption=p.caption, image_path=p.image.path) for p in report.photos.all()]
+        photo_items: list[PhotoItem] = []
+        temp_photo_paths: list[str] = []
+        if doc_kind != "report" and files:
+            photo_items, temp_photo_paths = _photo_items_from_uploads(files)
 
-        pdf_bytes = build_environmental_report_pdf(
-            doc_kind=doc_kind,
-            branch=report.branch,
-            revision=report.revision,
-            effective_from=effective_from,
-            report_date=report.report_date,
-            site_name=report.site_name,
-            inspection_form=report.inspection_form,
-            inspector_full_name=report.inspector_full_name,
-            inspector_position=report.inspector_position,
-            unit_representative_full_name=report.unit_representative_full_name,
-            unit_representative_position=report.unit_representative_position,
-            nonconformities=nonconf_rows,
-            photo_items=photo_items,
-            additional_unit_representatives=_additional_reps_for_pdf(report),
-            act_date=act_date,
-            analysis_proposed_vek=analysis_proposed_vek,
-            analysis_proposed_check=analysis_proposed_check,
-            analysis_actual=analysis_actual,
-            analysis_reason_text=analysis_reason_text,
-            analysis_violation=analysis_violation,
-            analysis_corrective_action=analysis_corrective_action,
-            analysis_cause_rows=analysis_cause_rows_parsed if analysis_cause_rows_parsed else None,
-            closure_rows=closure_rows_parsed,
-            closure_comments=closure_comments,
-        )
+        try:
+            pdf_bytes = build_environmental_report_pdf(
+                doc_kind=doc_kind,
+                branch=report.branch,
+                revision=report.revision,
+                effective_from=effective_from,
+                report_date=report.report_date,
+                site_name=report.site_name,
+                inspection_form=report.inspection_form,
+                inspector_full_name=report.inspector_full_name,
+                inspector_position=report.inspector_position,
+                unit_representative_full_name=report.unit_representative_full_name,
+                unit_representative_position=report.unit_representative_position,
+                nonconformities=nonconf_rows,
+                photo_items=photo_items,
+                additional_unit_representatives=_additional_reps_for_pdf(report),
+                act_date=act_date,
+                analysis_proposed_vek=analysis_proposed_vek,
+                analysis_proposed_check=analysis_proposed_check,
+                analysis_actual=analysis_actual,
+                analysis_reason_text=analysis_reason_text,
+                analysis_violation=analysis_violation,
+                analysis_corrective_action=analysis_corrective_action,
+                analysis_cause_rows=analysis_cause_rows_parsed if analysis_cause_rows_parsed else None,
+                closure_rows=closure_rows_parsed,
+                closure_comments=closure_comments,
+            )
+        finally:
+            for path in temp_photo_paths:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
 
         resp = HttpResponse(pdf_bytes, content_type="application/pdf")
         filename = "Звіт_Ф-15-02.pdf" if doc_kind == "report" else "Акт_ВЕК.pdf"

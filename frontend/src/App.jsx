@@ -174,6 +174,43 @@ function suggestedCorrectiveFromCatalog(catalog, description) {
 /** Лише для звіту Ф-15-02 — зберігається в corrective_actions */
 const REPORT_STAGE_OPTIONS = ['виконано', 'не виконано', 'виконано неповністю']
 
+/** Стиснення перед відправкою — менший запит і швидша генерація PDF на Render. */
+const PHOTO_MAX_SIDE = 1400
+const PHOTO_JPEG_QUALITY = 0.82
+const PHOTO_MAX_COUNT = 20
+
+async function compressPhotoFile(file) {
+  if (!file?.type?.startsWith('image/')) return file
+  try {
+    const bitmap = await createImageBitmap(file)
+    const longest = Math.max(bitmap.width, bitmap.height)
+    const scale = longest > PHOTO_MAX_SIDE ? PHOTO_MAX_SIDE / longest : 1
+    const w = Math.max(1, Math.round(bitmap.width * scale))
+    const h = Math.max(1, Math.round(bitmap.height * scale))
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
+      bitmap.close()
+      return file
+    }
+    ctx.drawImage(bitmap, 0, 0, w, h)
+    bitmap.close()
+    const blob = await new Promise((resolve) => {
+      canvas.toBlob(resolve, 'image/jpeg', PHOTO_JPEG_QUALITY)
+    })
+    if (!blob) return file
+    const baseName = (file.name || 'photo').replace(/\.[^.]+$/, '')
+    return new File([blob], `${baseName}.jpg`, {
+      type: 'image/jpeg',
+      lastModified: file.lastModified,
+    })
+  } catch {
+    return file
+  }
+}
+
 function isoToday() {
   const d = new Date()
   const pad = (n) => String(n).padStart(2, '0')
@@ -256,6 +293,7 @@ function App() {
 
   const [rows, setRows] = useState([emptyRow(1)])
   const [photos, setPhotos] = useState([])
+  const [compressingPhotos, setCompressingPhotos] = useState(false)
   const [closureRows, setClosureRows] = useState([emptyClosureRow()])
   const [closureComments, setClosureComments] = useState('')
 
@@ -691,11 +729,25 @@ function App() {
     setAdditionalReps((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)))
   }
 
-  const onPhotosChange = (e) => {
+  const onPhotosChange = async (e) => {
     const files = Array.from(e.target.files || [])
     if (!files.length) return
-    setPhotos((prev) => [...prev, ...files])
-    if (fileInputRef.current) fileInputRef.current.value = ''
+    setCompressingPhotos(true)
+    setError('')
+    try {
+      const compressed = await Promise.all(files.map((f) => compressPhotoFile(f)))
+      setPhotos((prev) => {
+        const merged = [...prev, ...compressed]
+        if (merged.length > PHOTO_MAX_COUNT) {
+          setError(`Максимум ${PHOTO_MAX_COUNT} фото за один акт. Зайві не додано.`)
+          return merged.slice(0, PHOTO_MAX_COUNT)
+        }
+        return merged
+      })
+    } finally {
+      setCompressingPhotos(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
   }
 
   const openPhotoPicker = () => {
@@ -1639,11 +1691,13 @@ function App() {
                         p={2}
                         {...FIELD_PROPS}
                       />
-                      {photos.length ? (
-                        <Text fontSize="sm" color="gray.600" mt={2}>
-                          Обрано: {photos.length} фото
-                        </Text>
-                      ) : null}
+                      <Text fontSize="sm" color="gray.600" mt={2}>
+                        {compressingPhotos
+                          ? 'Стиснення фото…'
+                          : photos.length
+                            ? `Обрано: ${photos.length} фото (до ${PHOTO_MAX_COUNT})`
+                            : `До ${PHOTO_MAX_COUNT} фото; перед відправкою стискаються для швидшої генерації PDF`}
+                      </Text>
                     </FormControl>
 
                     {photos.length ? (
@@ -1671,9 +1725,13 @@ function App() {
             _hover={{ bg: '#111827' }}
             size="lg"
             isLoading={submitting}
-            loadingText="Формую PDF…"
+            loadingText={
+              photos.length > 5
+                ? `Формую PDF (${photos.length} фото, зачекайте)…`
+                : 'Формую PDF…'
+            }
             onClick={submit}
-            isDisabled={!canSubmit || submitting}
+            isDisabled={!canSubmit || submitting || compressingPhotos}
           >
             Сформувати PDF
           </Button>
