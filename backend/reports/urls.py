@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     BranchesView,
     UnitsView,
+    ViolationCatalogView,
     NonconformityDescriptionsView,
     CorrectiveActionsView,
     InspectorAutofillView,
@@ -17,6 +18,11 @@ urlpatterns = [
     path("health/", HealthcheckView.as_view(), name="reports-health"),
     path("branches/", BranchesView.as_view(), name="branches"),
     path("units/", UnitsView.as_view(), name="units"),
+    path(
+        "violation-catalog/",
+        ViolationCatalogView.as_view(),
+        name="violation-catalog",
+    ),
     path(
         "nonconformity-descriptions/",
         NonconformityDescriptionsView.as_view(),

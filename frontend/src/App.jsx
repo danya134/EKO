@@ -97,6 +97,15 @@ const CORRECTIVE_ACTIONS_FALLBACK = [
   'Відновити ведення журналу обліку та призначити відповідального',
   'Організувати місце зберігання: накриття, піддон, огородження',
 ]
+const VIOLATION_CATALOG_FALLBACK = [
+  {
+    category: 'Загальне',
+    items: NONCONFORMITY_DESCRIPTIONS_FALLBACK.map((description, i) => ({
+      description,
+      corrective_action: CORRECTIVE_ACTIONS_FALLBACK[i] || '',
+    })),
+  },
+]
 
 const DOC_KIND = {
   ACT: 'act',
@@ -113,16 +122,53 @@ function effectiveFromLineFromIso(iso) {
   return `Діє з: \u201c${d}\u201d \u201c${m}\u201d ${y}р`
 }
 
-/**
- * Коригуюча дія за тим самим індексом у списках (як у JSON nonconformity_descriptions / corrective_actions).
- * Якщо текст порушення не збігається з пунктом каталогу — порожньо (лишаємо ручне заповнення).
- */
-function suggestedCorrectiveForDescription(description, descOptions, corrOptions) {
+function normalizeViolationCatalog(data) {
+  if (!Array.isArray(data)) return []
+  return data
+    .filter((block) => block && typeof block === 'object')
+    .map((block) => ({
+      category: String(block.category || '').trim(),
+      items: Array.isArray(block.items)
+        ? block.items
+            .filter((item) => item && typeof item === 'object')
+            .map((item) => ({
+              description: String(item.description || '').trim(),
+              corrective_action: String(item.corrective_action || '').trim(),
+            }))
+            .filter((item) => item.description)
+        : [],
+    }))
+    .filter((block) => block.category)
+}
+
+function catalogCategoryNames(catalog) {
+  return catalog.map((c) => c.category)
+}
+
+function catalogItemsForCategory(catalog, category) {
+  const cat = (category || '').trim()
+  if (!cat) return []
+  const block = catalog.find((c) => c.category === cat)
+  return block?.items || []
+}
+
+function findCatalogItem(catalog, description) {
   const d = (description || '').trim()
-  if (!d || !Array.isArray(descOptions) || !Array.isArray(corrOptions)) return ''
-  const idx = descOptions.findIndex((opt) => opt === d)
-  if (idx < 0) return ''
-  return (corrOptions[idx] || '').trim()
+  if (!d) return null
+  for (const block of catalog) {
+    for (const item of block.items || []) {
+      if (item.description === d) {
+        return { category: block.category, ...item }
+      }
+    }
+  }
+  return null
+}
+
+/** Коригуюча дія з каталогу за текстом порушення. */
+function suggestedCorrectiveFromCatalog(catalog, description) {
+  const found = findCatalogItem(catalog, description)
+  return found?.corrective_action || ''
 }
 
 /** Лише для звіту Ф-15-02 — зберігається в corrective_actions */
@@ -137,6 +183,7 @@ function isoToday() {
 function emptyRow(orderNumber) {
   return {
     order_number: orderNumber,
+    category: '',
     description: '',
     corrective_actions: '',
     responsible: '',
@@ -187,8 +234,7 @@ function App() {
   const [docKind, setDocKind] = useState(DOC_KIND.ACT)
   const [branch, setBranch] = useState('')
   const [branchOptions, setBranchOptions] = useState(BRANCH_OPTIONS_FALLBACK)
-  const [nonconformityDescriptionOptions, setNonconformityDescriptionOptions] = useState(NONCONFORMITY_DESCRIPTIONS_FALLBACK)
-  const [correctiveActionOptions, setCorrectiveActionOptions] = useState(CORRECTIVE_ACTIONS_FALLBACK)
+  const [violationCatalog, setViolationCatalog] = useState(VIOLATION_CATALOG_FALLBACK)
   const [revision, setRevision] = useState('0')
   const [effectiveFromDate, setEffectiveFromDate] = useState(DEFAULT_EFFECTIVE_FROM_DATE)
   const [reportDate, setReportDate] = useState(isoToday())
@@ -475,21 +521,11 @@ function App() {
     let cancelled = false
     ;(async () => {
       try {
-        const [descRes, actRes] = await Promise.all([
-          fetch(`${API_BASE}/api/nonconformity-descriptions/`),
-          fetch(`${API_BASE}/api/corrective-actions/`),
-        ])
-        if (!cancelled && descRes.ok) {
-          const data = await descRes.json()
-          if (Array.isArray(data) && data.every((x) => typeof x === 'string')) {
-            setNonconformityDescriptionOptions(data)
-          }
-        }
-        if (!cancelled && actRes.ok) {
-          const data = await actRes.json()
-          if (Array.isArray(data) && data.every((x) => typeof x === 'string')) {
-            setCorrectiveActionOptions(data)
-          }
+        const res = await fetch(`${API_BASE}/api/violation-catalog/`)
+        if (!cancelled && res.ok) {
+          const data = await res.json()
+          const normalized = normalizeViolationCatalog(data)
+          if (normalized.length) setViolationCatalog(normalized)
         }
       } catch {
         // fallback залишається
@@ -529,19 +565,15 @@ function App() {
 
   const [analysisSyncDeps, setAnalysisSyncDeps] = useState({
     rows: null,
-    desc: null,
-    act: null,
+    catalog: null,
   })
   if (
     docKind === DOC_KIND.REPORT &&
-    (analysisSyncDeps.rows !== rows ||
-      analysisSyncDeps.desc !== nonconformityDescriptionOptions ||
-      analysisSyncDeps.act !== correctiveActionOptions)
+    (analysisSyncDeps.rows !== rows || analysisSyncDeps.catalog !== violationCatalog)
   ) {
     setAnalysisSyncDeps({
       rows,
-      desc: nonconformityDescriptionOptions,
-      act: correctiveActionOptions,
+      catalog: violationCatalog,
     })
     setAnalysisCauseRows((prev) => {
       const n = rows.length
@@ -551,11 +583,7 @@ function App() {
         const desc = descRaw.trim()
         const prevRow = prev[i]
         const prevV = (prevRow?.violation || '').trim()
-        const sug = suggestedCorrectiveForDescription(
-          descRaw,
-          nonconformityDescriptionOptions,
-          correctiveActionOptions
-        )
+        const sug = suggestedCorrectiveFromCatalog(violationCatalog, descRaw)
         const reason = prevRow?.reason || ''
         let corrective = prevRow?.corrective || ''
         if (desc !== prevV) {
@@ -575,19 +603,15 @@ function App() {
 
   const [closureSyncDeps, setClosureSyncDeps] = useState({
     rows: null,
-    desc: null,
-    act: null,
+    catalog: null,
   })
   if (
     docKind === DOC_KIND.REPORT &&
-    (closureSyncDeps.rows !== rows ||
-      closureSyncDeps.desc !== nonconformityDescriptionOptions ||
-      closureSyncDeps.act !== correctiveActionOptions)
+    (closureSyncDeps.rows !== rows || closureSyncDeps.catalog !== violationCatalog)
   ) {
     setClosureSyncDeps({
       rows,
-      desc: nonconformityDescriptionOptions,
-      act: correctiveActionOptions,
+      catalog: violationCatalog,
     })
     setClosureRows((prev) => {
       const n = rows.length
@@ -597,11 +621,7 @@ function App() {
         const descRaw = src?.description || ''
         const desc = descRaw.trim()
         const stage = (src?.corrective_actions || '').trim()
-        const sug = suggestedCorrectiveForDescription(
-          descRaw,
-          nonconformityDescriptionOptions,
-          correctiveActionOptions
-        )
+        const sug = suggestedCorrectiveFromCatalog(violationCatalog, descRaw)
         const prevRow = prev[i]
         const prevSrcDesc = (prevRow?._srcDesc || '').trim()
         const prevSrcStage = (prevRow?._srcStage || '').trim()
@@ -1161,33 +1181,61 @@ function App() {
                           </HStack>
 
                           <FormControl>
+                            <FormLabel>Оберіть категорію порушення</FormLabel>
+                            <Select
+                              minH={MIN_TAP_H}
+                              placeholder="Оберіть категорію порушення"
+                              value={r.category || ''}
+                              onChange={(e) => {
+                                const category = e.target.value
+                                updateRow(idx, {
+                                  category,
+                                  description: '',
+                                  ...(docKind === DOC_KIND.ACT ? { corrective_actions: '' } : {}),
+                                })
+                              }}
+                              bg="white"
+                              borderColor="blackAlpha.300"
+                            >
+                              {catalogCategoryNames(violationCatalog).map((cat) => (
+                                <option key={cat} value={cat}>
+                                  {cat}
+                                </option>
+                              ))}
+                            </Select>
+                          </FormControl>
+
+                          <FormControl>
                             <FormLabel>
                               {docKind === DOC_KIND.REPORT ? 'Виявлена при ВЕК (опис)' : 'Опис порушення'}
                             </FormLabel>
                             <Select
                               minH={MIN_TAP_H}
-                              placeholder="Обрати зі списку (або введіть вручну нижче)"
+                              placeholder={
+                                r.category
+                                  ? 'Обрати зі списку (або введіть вручну нижче)'
+                                  : 'Спочатку оберіть категорію порушення'
+                              }
                               value=""
+                              isDisabled={!r.category}
                               onChange={(e) => {
                                 if (!e.target.value) return
                                 const desc = e.target.value
                                 const patch = { description: desc }
-                                if (docKind === DOC_KIND.ACT) {
-                                  const sug = suggestedCorrectiveForDescription(
-                                    desc,
-                                    nonconformityDescriptionOptions,
-                                    correctiveActionOptions
-                                  )
-                                  if (sug) patch.corrective_actions = sug
+                                const item = catalogItemsForCategory(violationCatalog, r.category).find(
+                                  (opt) => opt.description === desc
+                                )
+                                if (docKind === DOC_KIND.ACT && item?.corrective_action) {
+                                  patch.corrective_actions = item.corrective_action
                                 }
                                 updateRow(idx, patch)
                               }}
                               bg="white"
                               borderColor="blackAlpha.300"
                             >
-                              {nonconformityDescriptionOptions.map((opt) => (
-                                <option key={opt} value={opt}>
-                                  {opt}
+                              {catalogItemsForCategory(violationCatalog, r.category).map((item) => (
+                                <option key={item.description} value={item.description}>
+                                  {item.description}
                                 </option>
                               ))}
                             </Select>
@@ -1195,7 +1243,15 @@ function App() {
                               minH="96px"
                               mt={2}
                               value={r.description}
-                              onChange={(e) => updateRow(idx, { description: e.target.value })}
+                              onChange={(e) => {
+                                const description = e.target.value
+                                const patch = { description }
+                                if (!r.category?.trim()) {
+                                  const found = findCatalogItem(violationCatalog, description)
+                                  if (found) patch.category = found.category
+                                }
+                                updateRow(idx, patch)
+                              }}
                               {...FIELD_PROPS}
                             />
                           </FormControl>
@@ -1217,7 +1273,6 @@ function App() {
                                 bg="white"
                                 borderColor="blackAlpha.300"
                               >
-                                <option value="">Оберіть стадію</option>
                                 {REPORT_STAGE_OPTIONS.map((opt) => (
                                   <option key={opt} value={opt}>
                                     {opt}
@@ -1228,17 +1283,22 @@ function App() {
                               <>
                                 <Select
                                   minH={MIN_TAP_H}
-                                  placeholder="Обрати зі списку (або введіть вручну нижче)"
+                                  placeholder={
+                                    r.category
+                                      ? 'Обрати зі списку (або введіть вручну нижче)'
+                                      : 'Спочатку оберіть категорію порушення'
+                                  }
                                   value=""
+                                  isDisabled={!r.category}
                                   onChange={(e) => {
                                     if (e.target.value) updateRow(idx, { corrective_actions: e.target.value })
                                   }}
                                   bg="white"
                                   borderColor="blackAlpha.300"
                                 >
-                                  {correctiveActionOptions.map((opt) => (
-                                    <option key={opt} value={opt}>
-                                      {opt}
+                                  {catalogItemsForCategory(violationCatalog, r.category).map((item) => (
+                                    <option key={item.corrective_action} value={item.corrective_action}>
+                                      {item.corrective_action}
                                     </option>
                                   ))}
                                 </Select>
@@ -1429,8 +1489,13 @@ function App() {
                               <FormLabel>Коригуюча дія</FormLabel>
                               <Select
                                 minH={MIN_TAP_H}
-                                placeholder="Обрати зі списку (як у акті)"
+                                placeholder={
+                                  rows[idx]?.category
+                                    ? 'Обрати зі списку (як у акті)'
+                                    : 'Спочатку оберіть категорію у блоці 03'
+                                }
                                 value=""
+                                isDisabled={!rows[idx]?.category}
                                 onChange={(e) => {
                                   if (e.target.value)
                                     updateAnalysisCauseRow(idx, { corrective: e.target.value })
@@ -1438,11 +1503,13 @@ function App() {
                                 bg="white"
                                 borderColor="blackAlpha.300"
                               >
-                                {correctiveActionOptions.map((opt) => (
-                                  <option key={opt} value={opt}>
-                                    {opt}
-                                  </option>
-                                ))}
+                                {catalogItemsForCategory(violationCatalog, rows[idx]?.category).map(
+                                  (item) => (
+                                    <option key={item.corrective_action} value={item.corrective_action}>
+                                      {item.corrective_action}
+                                    </option>
+                                  )
+                                )}
                               </Select>
                               <Textarea
                                 minH="80px"
@@ -1489,8 +1556,13 @@ function App() {
                               <FormLabel>Коригуюча дія</FormLabel>
                               <Select
                                 minH={MIN_TAP_H}
-                                placeholder="Оберіть зі списку (або введіть текст нижче)"
+                                placeholder={
+                                  rows[idx]?.category
+                                    ? 'Оберіть зі списку (або введіть текст нижче)'
+                                    : 'Спочатку оберіть категорію у блоці 03'
+                                }
                                 value=""
+                                isDisabled={!rows[idx]?.category}
                                 onChange={(e) => {
                                   if (e.target.value)
                                     updateClosureRow(idx, { corrective_action: e.target.value })
@@ -1499,11 +1571,13 @@ function App() {
                                 borderColor="blackAlpha.300"
                               >
                                 <option value="">—</option>
-                                {correctiveActionOptions.map((opt) => (
-                                  <option key={opt} value={opt}>
-                                    {opt}
-                                  </option>
-                                ))}
+                                {catalogItemsForCategory(violationCatalog, rows[idx]?.category).map(
+                                  (item) => (
+                                    <option key={item.corrective_action} value={item.corrective_action}>
+                                      {item.corrective_action}
+                                    </option>
+                                  )
+                                )}
                               </Select>
                               <Textarea
                                 minH="80px"

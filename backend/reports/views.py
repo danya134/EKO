@@ -173,37 +173,100 @@ class UnitsView(APIView):
         return Response(out, status=status.HTTP_200_OK)
 
 
-class NonconformityDescriptionsView(APIView):
-    def get(self, request, *args, **kwargs):
-        path = Path(__file__).resolve().parent / "nonconformity_descriptions.json"
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            data = []
-        if not isinstance(data, list):
-            data = []
-        data = [x for x in data if isinstance(x, str) and x.strip()]
-        return Response(data, status=status.HTTP_200_OK)
-
-
-class CorrectiveActionsView(APIView):
-    def get(self, request, *args, **kwargs):
-        path = Path(__file__).resolve().parent / "corrective_actions.json"
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            data = []
-        if not isinstance(data, list):
-            data = []
-        data = [x for x in data if isinstance(x, str) and x.strip()]
-        return Response(data, status=status.HTTP_200_OK)
-
-
 def _load_json(path: Path, *, default):
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return default
+
+
+def _load_violation_catalog() -> list[dict]:
+    """
+    Каталог порушень за категоріями: [{category, items: [{description, corrective_action}]}].
+    Якщо violation_catalog.json відсутній — збираємо з legacy-файлів (плоский список).
+    """
+    base = Path(__file__).resolve().parent
+    catalog_path = base / "violation_catalog.json"
+    raw = _load_json(catalog_path, default=None)
+    if isinstance(raw, list) and raw:
+        out: list[dict] = []
+        for block in raw:
+            if not isinstance(block, dict):
+                continue
+            category = str(block.get("category") or "").strip()
+            if not category:
+                continue
+            items_raw = block.get("items")
+            if not isinstance(items_raw, list):
+                items_raw = []
+            items: list[dict[str, str]] = []
+            for item in items_raw:
+                if not isinstance(item, dict):
+                    continue
+                desc = str(item.get("description") or "").strip()
+                if not desc:
+                    continue
+                items.append(
+                    {
+                        "description": desc,
+                        "corrective_action": str(item.get("corrective_action") or "").strip(),
+                    }
+                )
+            out.append({"category": category, "items": items})
+        if out:
+            return out
+
+    desc_path = base / "nonconformity_descriptions.json"
+    corr_path = base / "corrective_actions.json"
+    descriptions = _load_json(desc_path, default=[])
+    correctives = _load_json(corr_path, default=[])
+    if not isinstance(descriptions, list):
+        descriptions = []
+    if not isinstance(correctives, list):
+        correctives = []
+    items: list[dict[str, str]] = []
+    for i, desc in enumerate(descriptions):
+        if not isinstance(desc, str) or not desc.strip():
+            continue
+        corr = ""
+        if i < len(correctives) and isinstance(correctives[i], str):
+            corr = correctives[i].strip()
+        items.append({"description": desc.strip(), "corrective_action": corr})
+    if not items:
+        return []
+    return [{"category": "Загальне", "items": items}]
+
+
+def _flatten_violation_catalog(catalog: list[dict]) -> tuple[list[str], list[str]]:
+    descriptions: list[str] = []
+    correctives: list[str] = []
+    for block in catalog:
+        for item in block.get("items") or []:
+            if not isinstance(item, dict):
+                continue
+            desc = str(item.get("description") or "").strip()
+            if not desc:
+                continue
+            descriptions.append(desc)
+            correctives.append(str(item.get("corrective_action") or "").strip())
+    return descriptions, correctives
+
+
+class ViolationCatalogView(APIView):
+    def get(self, request, *args, **kwargs):
+        return Response(_load_violation_catalog(), status=status.HTTP_200_OK)
+
+
+class NonconformityDescriptionsView(APIView):
+    def get(self, request, *args, **kwargs):
+        descriptions, _ = _flatten_violation_catalog(_load_violation_catalog())
+        return Response(descriptions, status=status.HTTP_200_OK)
+
+
+class CorrectiveActionsView(APIView):
+    def get(self, request, *args, **kwargs):
+        _, correctives = _flatten_violation_catalog(_load_violation_catalog())
+        return Response(correctives, status=status.HTTP_200_OK)
 
 
 def _inspector_pair_from_dict(d: dict) -> dict[str, str]:
