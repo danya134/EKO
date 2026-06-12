@@ -1572,7 +1572,7 @@ function App() {
                             <FormControl>
                               <FormLabel>Порушення</FormLabel>
                               <Text fontSize="xs" color="gray.600" mb={1}>
-                                Редагується у блоці «Спостережувана невідповідність»; тут лише для перегляду.
+                                Редагується у блоці «Спостережувана невідповідність»;
                               </Text>
                               <Textarea
                                 minH="96px"
@@ -1698,7 +1698,7 @@ function App() {
                                 onChange={(e) =>
                                   updateClosureRow(idx, { corrective_action: e.target.value })
                                 }
-                                placeholder="Текст коригуючої дії (підставляється з блоці 03 за каталогом)"
+                                placeholder="Коригуюча дія"
                                 {...FIELD_PROPS}
                               />
                             </FormControl>
