@@ -114,6 +114,7 @@ const DOC_KIND = {
 
 /** Дата за замовчуванням для «Діє з» (04.06.2018 — як на типовому бланку). */
 const DEFAULT_EFFECTIVE_FROM_DATE = '2018-06-04'
+const DEFAULT_REVISION = '0'
 
 /** Рядок для шапки PDF: Діє з: "DD" "MM" YYYYр (типографські лапки). */
 function effectiveFromLineFromIso(iso) {
@@ -272,7 +273,7 @@ function App() {
   const [branch, setBranch] = useState('')
   const [branchOptions, setBranchOptions] = useState(BRANCH_OPTIONS_FALLBACK)
   const [violationCatalog, setViolationCatalog] = useState(VIOLATION_CATALOG_FALLBACK)
-  const [revision, setRevision] = useState('0')
+  const [revision, setRevision] = useState(DEFAULT_REVISION)
   const [effectiveFromDate, setEffectiveFromDate] = useState(DEFAULT_EFFECTIVE_FROM_DATE)
   const [reportDate, setReportDate] = useState(isoToday())
   /** Дата акта ВЕК у підставах звіту (текст «від …»); дата звіту — окремо в колонці таблиці */
@@ -305,6 +306,7 @@ function App() {
   // Початкові значення посад трактуємо як "автозаповнені" —
   // тоді при підвантаженні з JSON вони коректно перезаписуються.
   const lastAutoInspectorRef = useRef({ fullName: '', position: 'Провідний Еколог' })
+  const lastAutoRevisionRef = useRef({ revision: DEFAULT_REVISION, effectiveFrom: DEFAULT_EFFECTIVE_FROM_DATE })
   const lastAutoUnitRepRef = useRef({ fullName: '', position: 'Начальник дільниці' })
   const lastAutoResponsibleRef = useRef('')
   const lastAutoAdditionalRepsRef = useRef([])
@@ -324,8 +326,9 @@ function App() {
       setError('')
       setBranch('')
       setSiteOptions([])
-      setRevision('0')
+      setRevision(DEFAULT_REVISION)
       setEffectiveFromDate(DEFAULT_EFFECTIVE_FROM_DATE)
+      lastAutoRevisionRef.current = { revision: DEFAULT_REVISION, effectiveFrom: DEFAULT_EFFECTIVE_FROM_DATE }
       setReportDate(isoToday())
       setActDate(isoToday())
       setAnalysisProposedVek('')
@@ -406,6 +409,34 @@ function App() {
     lastRef.current = { fullName: nextFullName, position: nextPosition }
   }
 
+  const applyRevisionAutofill = ({ incomingRevision, incomingEffectiveFrom }) => {
+    const nextRevision = String(incomingRevision ?? '').trim()
+    const nextEffectiveFrom = (incomingEffectiveFrom || '').trim()
+    if (!nextRevision && !nextEffectiveFrom) return
+
+    const prevAutoRevision = (lastAutoRevisionRef.current.revision || '').trim()
+    const prevAutoEffectiveFrom = lastAutoRevisionRef.current.effectiveFrom || DEFAULT_EFFECTIVE_FROM_DATE
+
+    if (nextRevision) {
+      setRevision((prev) => {
+        const prevTrim = (prev || '').trim()
+        if (!prevTrim || prevTrim === prevAutoRevision) return nextRevision
+        return prev
+      })
+    }
+    if (nextEffectiveFrom) {
+      setEffectiveFromDate((prev) => {
+        if (!prev || prev === prevAutoEffectiveFrom) return nextEffectiveFrom
+        return prev
+      })
+    }
+
+    lastAutoRevisionRef.current = {
+      revision: nextRevision || prevAutoRevision || DEFAULT_REVISION,
+      effectiveFrom: nextEffectiveFrom || prevAutoEffectiveFrom,
+    }
+  }
+
   useEffect(() => {
     if (!isFirstBranchRunRef.current) {
       // Очищаємо залежні поля при зміні філії —
@@ -413,7 +444,10 @@ function App() {
       setSiteName('')
       setInspectorFullName('')
       setInspectorPosition('')
+      setRevision(DEFAULT_REVISION)
+      setEffectiveFromDate(DEFAULT_EFFECTIVE_FROM_DATE)
       lastAutoInspectorRef.current = { fullName: '', position: '' }
+      lastAutoRevisionRef.current = { revision: DEFAULT_REVISION, effectiveFrom: DEFAULT_EFFECTIVE_FROM_DATE }
     }
     isFirstBranchRunRef.current = false
   }, [branch])
@@ -450,6 +484,32 @@ function App() {
       cancelled = true
     }
   }, [branch, siteName, siteOptions])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        if (!branch.trim()) return
+        const url = new URL(`${API_BASE}/api/revision-autofill/`)
+        url.searchParams.set('branch', branch)
+        const insp = (inspectorFullName || '').trim()
+        if (insp) url.searchParams.set('inspector_full_name', insp)
+        const res = await fetch(url.toString())
+        if (!res.ok) return
+        const data = await res.json()
+        if (cancelled) return
+        applyRevisionAutofill({
+          incomingRevision: data?.revision,
+          incomingEffectiveFrom: data?.effective_from,
+        })
+      } catch {
+        // ignore
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [branch, inspectorFullName])
 
   useEffect(() => {
     if (!isFirstSiteNameRunRef.current) {

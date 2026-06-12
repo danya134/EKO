@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from datetime import date
@@ -343,6 +344,61 @@ def _resolve_inspector_autofill(raw: object, *, unit: str) -> dict[str, str]:
         if not _inspector_unit_key(e):
             return _inspector_pair_from_dict(e)
     return _inspector_pair_from_dict(entries[0])
+
+
+def _dd_mm_yyyy_to_iso(s: str) -> str:
+    s = (s or "").strip()
+    m = re.match(r"^(\d{2})\.(\d{2})\.(\d{4})$", s)
+    if m:
+        return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+    return ""
+
+
+def _revision_pair_from_dict(d: dict) -> dict[str, str]:
+    revision = str(d.get("revision") or "").strip()
+    effective_from = _dd_mm_yyyy_to_iso(str(d.get("effective_from") or "").strip())
+    return {"revision": revision, "effective_from": effective_from}
+
+
+def _resolve_revision_autofill(raw: object, *, inspector_full_name: str) -> dict[str, str]:
+    """
+    revision_autofill.json: для ключа філії — об'єкт {revision, effective_from}
+    або масив об'єктів з полем inspector_full_name (для ПрАТ «Миронівська птахофабрика»).
+    """
+    if isinstance(raw, dict):
+        return _revision_pair_from_dict(raw)
+    if isinstance(raw, list):
+        insp = (inspector_full_name or "").strip()
+        if insp:
+            for e in raw:
+                if not isinstance(e, dict):
+                    continue
+                fn = str(e.get("inspector_full_name") or "").strip()
+                if fn and fn == insp:
+                    return _revision_pair_from_dict(e)
+        return {"revision": "", "effective_from": ""}
+    return {"revision": "", "effective_from": ""}
+
+
+class RevisionAutofillView(APIView):
+    """
+    GET ?branch=...&inspector_full_name=... (inspector_full_name необов'язково).
+
+    Для більшості філій достатньо branch. Для ПрАТ «Миронівська птахофабрика»
+    редакція залежить від ПІБ перевіряючого (Танана Оксана → 4, Демуз Інна → 5).
+    Якщо запису немає — повертає порожні поля (фронт залишає дефолт).
+    """
+
+    def get(self, request, *args, **kwargs):
+        branch = (request.query_params.get("branch") or "").strip()
+        inspector_full_name = (request.query_params.get("inspector_full_name") or "").strip()
+        path = Path(__file__).resolve().parent / "revision_autofill.json"
+        data = _load_json(path, default={})
+        if not isinstance(data, dict):
+            data = {}
+        raw = data.get(branch) if branch else None
+        picked = _resolve_revision_autofill(raw, inspector_full_name=inspector_full_name)
+        return Response(picked, status=status.HTTP_200_OK)
 
 
 class InspectorAutofillView(APIView):

@@ -7,6 +7,7 @@ from .views import (
     NonconformityDescriptionsView,
     CorrectiveActionsView,
     InspectorAutofillView,
+    RevisionAutofillView,
     UnitRepresentativeAutofillView,
     EnvironmentalReportGeneratePdfFormView,
     EnvironmentalReportPdfView,
@@ -37,6 +38,11 @@ urlpatterns = [
         "inspector-autofill/",
         InspectorAutofillView.as_view(),
         name="inspector-autofill",
+    ),
+    path(
+        "revision-autofill/",
+        RevisionAutofillView.as_view(),
+        name="revision-autofill",
     ),
     path(
         "unit-representative-autofill/",
