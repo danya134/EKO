@@ -37,6 +37,12 @@ FONT_BOLD_ITALIC = "TimesNewRoman-BoldItalic"
 HEADER_H = 40 * mm
 # Текст у шапці PDF (ліва нижня комірка), якщо з форми не передано своє значення.
 _DEFAULT_EFFECTIVE_FROM = "Діє з: \u201c04\u201d \u201c06\u201d 2018р"
+_DEFAULT_ACT_DOCUMENT_TITLE = (
+    "Ф-15-01 Акт перевірки виробничої діяльності щодо дотримання вимог природоохоронного законодавства"
+)
+_DEFAULT_REPORT_DOCUMENT_TITLE = (
+    "Ф-15-02 Звіт з перевірки виконання коригуючих дій з усунення виявлених невідповідностей"
+)
 TABLE_SIDE_GAP = 2 * mm
 # Під таблицею: поле ПІБ — відступ від правого краю текстового поля (як на бланку).
 SIG_PIB_RIGHT_MARGIN = 10 * mm
@@ -338,6 +344,7 @@ def _draw_page_header(
     branch: str,
     revision: str,
     effective_from: str = "",
+    document_title: str = "",
     report_date: date,
     site_name: str,
     page_num: int,
@@ -445,10 +452,10 @@ def _draw_page_header(
     kind = (doc_kind or "act").strip().lower()
     if kind not in {"act", "report"}:
         kind = "act"
-    mid_top_text = (
-        "Ф-15-02 Звіт з перевірки виконання коригуючих дій з усунення виявлених невідповідностей"
+    mid_top_text = (document_title or "").strip() or (
+        _DEFAULT_REPORT_DOCUMENT_TITLE
         if kind == "report"
-        else "Ф-15-01 Акт перевірки виробничої діяльності щодо дотримання вимог природоохоронного законодавства"
+        else _DEFAULT_ACT_DOCUMENT_TITLE
     )
     left_top = _fit_paragraph(
         f"Редакція документа: {revision or '-'}",
@@ -611,6 +618,7 @@ def build_environmental_report_pdf(
     branch: str,
     revision: str,
     effective_from: str = "",
+    document_title: str = "",
     report_date: date,
     site_name: str,
     inspection_form: str,
@@ -1341,6 +1349,7 @@ def build_environmental_report_pdf(
         branch=branch,
         revision=revision,
         effective_from=effective_from,
+        document_title=document_title,
         report_date=report_date,
         site_name=site_name,
         doc_kind=kind,

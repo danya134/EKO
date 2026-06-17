@@ -347,17 +347,59 @@ def _resolve_inspector_autofill(raw: object, *, unit: str) -> dict[str, str]:
 
 
 def _dd_mm_yyyy_to_iso(s: str) -> str:
-    s = (s or "").strip()
+    s = (s or "").strip().replace("/", ".")
     m = re.match(r"^(\d{2})\.(\d{2})\.(\d{4})$", s)
     if m:
         return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
     return ""
 
 
+def _akt_json_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "АКТ.json"
+
+
+def _load_akt_autofill_map() -> dict[str, dict[str, str]]:
+    """
+    АКТ.json: масив об'єктів з полями «Підприємство», «Редакція регламенту управління екологією №»,
+    «Діє з:», «Назва документу». Файл може бути без зовнішніх дужок масиву.
+    """
+    path = _akt_json_path()
+    try:
+        raw_text = path.read_text(encoding="utf-8").strip()
+        if not raw_text.startswith("["):
+            raw_text = f"[{raw_text}]"
+        raw = json.loads(raw_text)
+    except Exception:
+        return {}
+    if not isinstance(raw, list):
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        branch = str(item.get("Підприємство") or "").strip()
+        if not branch:
+            continue
+        revision = str(item.get("Редакція регламенту управління екологією №") or "").strip()
+        effective_from = _dd_mm_yyyy_to_iso(str(item.get("Діє з:") or "").strip())
+        document_name = str(item.get("Назва документу") or "").strip().replace("\n", " ")
+        out[branch] = {
+            "revision": revision,
+            "effective_from": effective_from,
+            "document_name": document_name,
+        }
+    return out
+
+
 def _revision_pair_from_dict(d: dict) -> dict[str, str]:
     revision = str(d.get("revision") or "").strip()
     effective_from = _dd_mm_yyyy_to_iso(str(d.get("effective_from") or "").strip())
-    return {"revision": revision, "effective_from": effective_from}
+    document_name = str(d.get("document_name") or "").strip().replace("\n", " ")
+    return {
+        "revision": revision,
+        "effective_from": effective_from,
+        "document_name": document_name,
+    }
 
 
 def _resolve_revision_autofill(raw: object, *, inspector_full_name: str) -> dict[str, str]:
@@ -376,8 +418,8 @@ def _resolve_revision_autofill(raw: object, *, inspector_full_name: str) -> dict
                 fn = str(e.get("inspector_full_name") or "").strip()
                 if fn and fn == insp:
                     return _revision_pair_from_dict(e)
-        return {"revision": "", "effective_from": ""}
-    return {"revision": "", "effective_from": ""}
+        return {"revision": "", "effective_from": "", "document_name": ""}
+    return {"revision": "", "effective_from": "", "document_name": ""}
 
 
 class RevisionAutofillView(APIView):
@@ -398,6 +440,16 @@ class RevisionAutofillView(APIView):
             data = {}
         raw = data.get(branch) if branch else None
         picked = _resolve_revision_autofill(raw, inspector_full_name=inspector_full_name)
+
+        akt = _load_akt_autofill_map().get(branch) if branch else None
+        if isinstance(akt, dict):
+            if not picked.get("revision") and akt.get("revision"):
+                picked["revision"] = akt["revision"]
+            if not picked.get("effective_from") and akt.get("effective_from"):
+                picked["effective_from"] = akt["effective_from"]
+            if akt.get("document_name"):
+                picked["document_name"] = akt["document_name"]
+
         return Response(picked, status=status.HTTP_200_OK)
 
 
@@ -491,6 +543,7 @@ class EnvironmentalReportPdfView(APIView):
         report: EnvironmentalReport = serializer.save()
 
         effective_from = str(request.data.get("effective_from") or "").strip()
+        document_title = str(request.data.get("document_title") or "").strip()
 
         nonconf_rows = [
             NonconformityRow(
@@ -512,6 +565,7 @@ class EnvironmentalReportPdfView(APIView):
             branch=report.branch,
             revision=report.revision,
             effective_from=effective_from,
+            document_title=document_title,
             report_date=report.report_date,
             site_name=report.site_name,
             inspection_form=report.inspection_form,
@@ -537,6 +591,7 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
     Очікує поля:
     - branch, revision, report_date (YYYY-MM-DD)
     - effective_from: необов'язково — рядок для шапки («Діє з: …»); якщо порожньо — підставляється значення за замовчуванням
+    - document_title: необов'язково — назва документа в шапці; якщо порожньо — типовий Ф-15-01 / Ф-15-02
     - act_date (YYYY-MM-DD), необов’язково: дата складання акта для тексту підстав ВЕК; якщо порожньо — дорівнює report_date
     - site_name, inspector_full_name, unit_representative_full_name
     - nonconformities_json: JSON array [{order_number, description, corrective_actions, responsible, due_date}]
@@ -561,6 +616,7 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
         branch = req_str("branch")
         revision = (data.get("revision") or "").strip()
         effective_from = (data.get("effective_from") or "").strip()
+        document_title = (data.get("document_title") or "").strip()
         site_name = req_str("site_name")
         doc_kind = (data.get("doc_kind") or "").strip().lower() or "act"
         if doc_kind not in {"act", "report"}:
@@ -728,6 +784,7 @@ class EnvironmentalReportGeneratePdfFormView(APIView):
                 branch=report.branch,
                 revision=report.revision,
                 effective_from=effective_from,
+                document_title=document_title,
                 report_date=report.report_date,
                 site_name=report.site_name,
                 inspection_form=report.inspection_form,

@@ -115,6 +115,8 @@ const DOC_KIND = {
 /** Дата за замовчуванням для «Діє з» (04.06.2018 — як на типовому бланку). */
 const DEFAULT_EFFECTIVE_FROM_DATE = '2018-06-04'
 const DEFAULT_REVISION = '0'
+const DEFAULT_ACT_DOCUMENT_TITLE =
+  'Ф-15-01 Акт перевірки виробничої діяльності щодо дотримання вимог природоохоронного законодавства'
 
 /** Рядок для шапки PDF: Діє з: "DD" "MM" YYYYр (типографські лапки). */
 function effectiveFromLineFromIso(iso) {
@@ -275,6 +277,7 @@ function App() {
   const [violationCatalog, setViolationCatalog] = useState(VIOLATION_CATALOG_FALLBACK)
   const [revision, setRevision] = useState(DEFAULT_REVISION)
   const [effectiveFromDate, setEffectiveFromDate] = useState(DEFAULT_EFFECTIVE_FROM_DATE)
+  const [documentTitle, setDocumentTitle] = useState(DEFAULT_ACT_DOCUMENT_TITLE)
   const [reportDate, setReportDate] = useState(isoToday())
   /** Дата акта ВЕК у підставах звіту (текст «від …»); дата звіту — окремо в колонці таблиці */
   const [actDate, setActDate] = useState(isoToday())
@@ -306,7 +309,11 @@ function App() {
   // Початкові значення посад трактуємо як "автозаповнені" —
   // тоді при підвантаженні з JSON вони коректно перезаписуються.
   const lastAutoInspectorRef = useRef({ fullName: '', position: 'Провідний Еколог' })
-  const lastAutoRevisionRef = useRef({ revision: DEFAULT_REVISION, effectiveFrom: DEFAULT_EFFECTIVE_FROM_DATE })
+  const lastAutoRevisionRef = useRef({
+    revision: DEFAULT_REVISION,
+    effectiveFrom: DEFAULT_EFFECTIVE_FROM_DATE,
+    documentTitle: DEFAULT_ACT_DOCUMENT_TITLE,
+  })
   const lastAutoUnitRepRef = useRef({ fullName: '', position: 'Начальник дільниці' })
   const lastAutoResponsibleRef = useRef('')
   const lastAutoAdditionalRepsRef = useRef([])
@@ -328,7 +335,12 @@ function App() {
       setSiteOptions([])
       setRevision(DEFAULT_REVISION)
       setEffectiveFromDate(DEFAULT_EFFECTIVE_FROM_DATE)
-      lastAutoRevisionRef.current = { revision: DEFAULT_REVISION, effectiveFrom: DEFAULT_EFFECTIVE_FROM_DATE }
+      setDocumentTitle(DEFAULT_ACT_DOCUMENT_TITLE)
+      lastAutoRevisionRef.current = {
+        revision: DEFAULT_REVISION,
+        effectiveFrom: DEFAULT_EFFECTIVE_FROM_DATE,
+        documentTitle: DEFAULT_ACT_DOCUMENT_TITLE,
+      }
       setReportDate(isoToday())
       setActDate(isoToday())
       setAnalysisProposedVek('')
@@ -409,13 +421,15 @@ function App() {
     lastRef.current = { fullName: nextFullName, position: nextPosition }
   }
 
-  const applyRevisionAutofill = ({ incomingRevision, incomingEffectiveFrom }) => {
+  const applyRevisionAutofill = ({ incomingRevision, incomingEffectiveFrom, incomingDocumentName }) => {
     const nextRevision = String(incomingRevision ?? '').trim()
     const nextEffectiveFrom = (incomingEffectiveFrom || '').trim()
-    if (!nextRevision && !nextEffectiveFrom) return
+    const nextDocumentName = String(incomingDocumentName ?? '').trim()
+    if (!nextRevision && !nextEffectiveFrom && !nextDocumentName) return
 
     const prevAutoRevision = (lastAutoRevisionRef.current.revision || '').trim()
     const prevAutoEffectiveFrom = lastAutoRevisionRef.current.effectiveFrom || DEFAULT_EFFECTIVE_FROM_DATE
+    const prevAutoDocumentTitle = lastAutoRevisionRef.current.documentTitle || DEFAULT_ACT_DOCUMENT_TITLE
 
     if (nextRevision) {
       setRevision((prev) => {
@@ -430,10 +444,18 @@ function App() {
         return prev
       })
     }
+    if (nextDocumentName) {
+      setDocumentTitle((prev) => {
+        const prevTrim = (prev || '').trim()
+        if (!prevTrim || prevTrim === prevAutoDocumentTitle) return nextDocumentName
+        return prev
+      })
+    }
 
     lastAutoRevisionRef.current = {
       revision: nextRevision || prevAutoRevision || DEFAULT_REVISION,
       effectiveFrom: nextEffectiveFrom || prevAutoEffectiveFrom,
+      documentTitle: nextDocumentName || prevAutoDocumentTitle,
     }
   }
 
@@ -446,8 +468,13 @@ function App() {
       setInspectorPosition('')
       setRevision(DEFAULT_REVISION)
       setEffectiveFromDate(DEFAULT_EFFECTIVE_FROM_DATE)
+      setDocumentTitle(DEFAULT_ACT_DOCUMENT_TITLE)
       lastAutoInspectorRef.current = { fullName: '', position: '' }
-      lastAutoRevisionRef.current = { revision: DEFAULT_REVISION, effectiveFrom: DEFAULT_EFFECTIVE_FROM_DATE }
+      lastAutoRevisionRef.current = {
+        revision: DEFAULT_REVISION,
+        effectiveFrom: DEFAULT_EFFECTIVE_FROM_DATE,
+        documentTitle: DEFAULT_ACT_DOCUMENT_TITLE,
+      }
     }
     isFirstBranchRunRef.current = false
   }, [branch])
@@ -501,6 +528,7 @@ function App() {
         applyRevisionAutofill({
           incomingRevision: data?.revision,
           incomingEffectiveFrom: data?.effective_from,
+          incomingDocumentName: data?.document_name,
         })
       } catch {
         // ignore
@@ -847,6 +875,9 @@ function App() {
       fd.append('branch', branch)
       fd.append('revision', revision)
       fd.append('effective_from', effectiveFromLineFromIso(effectiveFromDate))
+      if (docKind === DOC_KIND.ACT) {
+        fd.append('document_title', documentTitle)
+      }
       fd.append('report_date', reportDate)
       fd.append('act_date', docKind === DOC_KIND.REPORT ? actDate : reportDate)
       fd.append('site_name', siteName)
